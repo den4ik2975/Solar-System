@@ -322,6 +322,29 @@ union mat4 {
 	float elements[4][4];
 	vec4 columns[4];
 
+	static mat4 init(vec4 a, vec4 b, vec4 c, vec4 d)
+	{
+		mat4 result{};
+
+		result[0][0] = a.x;
+		result[0][1] = a.y;
+		result[0][2] = a.z;
+
+		result[1][0] = b.x;
+		result[1][1] = b.y;
+		result[1][2] = b.z;
+
+		result[2][0] = c.x;
+		result[2][1] = c.y;
+		result[2][2] = c.z;
+
+		result[3][0] = d.x;
+		result[3][1] = d.y;
+		result[3][2] = d.z;
+
+		return result;
+	}
+
 	static mat4 identity() {
 		mat4 result{};
 
