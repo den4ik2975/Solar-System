@@ -116,6 +116,72 @@ Material MediumRed = {
 	.shininess = 32.0f
 };
 
+Material YellowSun = {
+	.albedo_color = veekay::vec3{1.0f, 0.9f, 0.4f},
+	.specular_color = veekay::vec3{1.0f, 0.9f, 0.6f},
+	.shininess = 128.0f
+};
+
+Material MercuryMat = {
+	.albedo_color = veekay::vec3{0.7f, 0.7f, 0.7f},
+	.specular_color = veekay::vec3{0.4f, 0.4f, 0.4f},
+	.shininess = 64.0f
+};
+
+Material VenusMat = {
+	.albedo_color = veekay::vec3{0.9f, 0.7f, 0.4f},
+	.specular_color = veekay::vec3{0.4f, 0.3f, 0.2f},
+	.shininess = 64.0f
+};
+
+Material EarthMat = {
+	.albedo_color = veekay::vec3{0.2f, 0.4f, 0.9f},
+	.specular_color = veekay::vec3{0.3f, 0.3f, 0.3f},
+	.shininess = 96.0f
+};
+
+Material MarsMat = {
+	.albedo_color = veekay::vec3{0.8f, 0.4f, 0.2f},
+	.specular_color = veekay::vec3{0.3f, 0.2f, 0.1f},
+	.shininess = 64.0f
+};
+
+Material JupiterMat = {
+	.albedo_color = veekay::vec3{0.9f, 0.7f, 0.5f},
+	.specular_color = veekay::vec3{0.5f, 0.4f, 0.3f},
+	.shininess = 96.0f
+};
+
+Material SaturnMat = {
+	.albedo_color = veekay::vec3{0.9f, 0.8f, 0.6f},
+	.specular_color = veekay::vec3{0.5f, 0.4f, 0.2f},
+	.shininess = 96.0f
+};
+
+Material UranusMat = {
+	.albedo_color = veekay::vec3{0.6f, 0.8f, 0.9f},
+	.specular_color = veekay::vec3{0.3f, 0.4f, 0.4f},
+	.shininess = 96.0f
+};
+
+Material NeptuneMat = {
+	.albedo_color = veekay::vec3{0.3f, 0.4f, 0.9f},
+	.specular_color = veekay::vec3{0.2f, 0.3f, 0.6f},
+	.shininess = 96.0f
+};
+
+Material MoonMat = {
+	.albedo_color = veekay::vec3{0.8f, 0.8f, 0.8f},
+	.specular_color = veekay::vec3{0.3f, 0.3f, 0.3f},
+	.shininess = 32.0f
+};
+
+Material RingMat = {
+	.albedo_color = veekay::vec3{0.8f, 0.7f, 0.6f},
+	.specular_color = veekay::vec3{0.4f, 0.3f, 0.2f},
+	.shininess = 32.0f
+};
+
 struct Model : GameObject {
 	Mesh mesh;
 	std::string title;
@@ -151,6 +217,16 @@ struct CameraState {
 	veekay::vec3 target{};
 };
 
+struct Orbit {
+	size_t model_index;
+	size_t parent_index; // SIZE_MAX = no parent
+	float a;
+	float b;
+	float rotation_rad;
+	float omega;
+	float phase;
+};
+
 // NOTE: Scene objects
 inline namespace {
 	Camera camera{
@@ -174,6 +250,7 @@ inline namespace {
 	bool transform_state_valid = true;
 
 	std::vector<Model> models;
+	std::vector<Orbit> orbits;
 }
 
 struct Plane : Model {
@@ -267,6 +344,115 @@ struct Cube : Model {
 		Model m;
 		m.transform.position = position;
 		m.transform.scale = scale;
+		m.mesh = mesh;
+		m.material = material,
+		m.title = title;
+
+		models.push_back(m);
+	}
+};
+
+struct Sphere : Model {
+	Sphere(veekay::vec3 position, float radius, uint32_t stacks, uint32_t slices, Material material, std::string title = "Sphere", veekay::vec3 scale = {1.f,1.f,1.f})
+	{
+		std::vector<Vertex> vertices;
+		std::vector<uint32_t> indices;
+
+		for (uint32_t i = 0; i <= stacks; ++i) {
+			float v = float(i) / float(stacks);
+			float phi = v * float(M_PI);
+
+			for (uint32_t j = 0; j <= slices; ++j) {
+				float u = float(j) / float(slices);
+				float theta = u * float(M_PI) * 2.0f;
+
+				float x = std::sin(phi) * std::cos(theta);
+				float y = std::cos(phi);
+				float z = std::sin(phi) * std::sin(theta);
+
+				veekay::vec3 normal = {x, y, z};
+				veekay::vec3 pos = {x * radius, y * radius, z * radius};
+				vertices.push_back({pos, normal, {u, v}});
+			}
+		}
+
+		for (uint32_t i = 0; i < stacks; ++i) {
+			for (uint32_t j = 0; j < slices; ++j) {
+				uint32_t first = i * (slices + 1) + j;
+				uint32_t second = first + slices + 1;
+
+				indices.push_back(first);
+				indices.push_back(second);
+				indices.push_back(first + 1);
+
+				indices.push_back(second);
+				indices.push_back(second + 1);
+				indices.push_back(first + 1);
+			}
+		}
+
+		mesh.vertex_buffer = new veekay::graphics::Buffer(
+			vertices.size() * sizeof(Vertex), vertices.data(),
+			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+
+		mesh.index_buffer = new veekay::graphics::Buffer(
+			indices.size() * sizeof(uint32_t), indices.data(),
+			VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+
+		mesh.indices = uint32_t(indices.size());
+
+		Model m;
+		m.transform.position = position;
+		m.transform.scale = scale;
+		m.mesh = mesh;
+		m.material = material,
+		m.title = title;
+
+		models.push_back(m);
+	}
+};
+
+struct Ring : Model {
+	Ring(veekay::vec3 position, float inner_radius, float outer_radius, uint32_t segments, Material material, std::string title = "Ring")
+	{
+		std::vector<Vertex> vertices;
+		std::vector<uint32_t> indices;
+
+		for (uint32_t i = 0; i <= segments; ++i) {
+			float u = float(i) / float(segments);
+			float angle = u * float(M_PI) * 2.0f;
+			float c = std::cos(angle);
+			float s = std::sin(angle);
+
+			veekay::vec3 normal = {0.0f, 1.0f, 0.0f};
+
+			vertices.push_back({{inner_radius * c, 0.0f, inner_radius * s}, normal, {u, 0.0f}});
+			vertices.push_back({{outer_radius * c, 0.0f, outer_radius * s}, normal, {u, 1.0f}});
+		}
+
+		for (uint32_t i = 0; i < segments; ++i) {
+			uint32_t start = i * 2;
+			indices.push_back(start);
+			indices.push_back(start + 1);
+			indices.push_back(start + 2);
+
+			indices.push_back(start + 1);
+			indices.push_back(start + 3);
+			indices.push_back(start + 2);
+		}
+
+		mesh.vertex_buffer = new veekay::graphics::Buffer(
+			vertices.size() * sizeof(Vertex), vertices.data(),
+			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+
+		mesh.index_buffer = new veekay::graphics::Buffer(
+			indices.size() * sizeof(uint32_t), indices.data(),
+			VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+
+		mesh.indices = uint32_t(indices.size());
+
+		Model m;
+		m.transform.position = position;
 		m.mesh = mesh;
 		m.material = material,
 		m.title = title;
@@ -796,16 +982,67 @@ void initialize(VkCommandBuffer cmd) {
 		                       write_infos, 0, nullptr);
 	}
 
-	Plane({1.0f, 0.0f, 1.0f},Standart, "Plane1");
+	// Scene setup: solar system
+	Plane({0.0f, 0.0f, 0.0f}, Standart, "Ecliptic");
 
-	Cube({-2.0f, -0.5f, -1.5f}, MateGreen, "Cube1", {2.0f, 1.0f, 1.0f});
-	Cube({1.5f, -0.5f, -0.5f}, MettalicBlue, "Cube2");
-	Cube({0.0f, -0.5f, 1.0f}, MediumRed, "Cube3");
+	const auto add_orbit = [&](size_t model_index, size_t parent_index, float a, float e, float rotation_deg, float period_years, float phase = 0.0f) {
+		float b = a * std::sqrt(1.0f - e * e);
+		float omega = float(2.0 * M_PI / period_years);
+		orbits.push_back(Orbit{
+			.model_index = model_index,
+			.parent_index = parent_index,
+			.a = a,
+			.b = b,
+			.rotation_rad = toRadians(rotation_deg),
+			.omega = omega,
+			.phase = phase
+		});
+	};
 
-	Cube({-2.0f, -0.5f, 3.0f}, MediumRed, "Cube4");
-	Cube({0.0f, -0.5f, 3.0f}, MediumRed, "Cube5");
-	Cube({2.0f, -0.5f, 3.0f}, MediumRed, "Cube6");
+	auto add_planet = [&](const veekay::vec3& pos, float radius, Material mat, const std::string& name) -> size_t {
+		size_t before = models.size();
+		Sphere(pos, radius, 24, 36, mat, name);
+		return models.size() - 1;
+	};
 
+	// Scale distances to fit the scene
+	const float base_distance = 1.5f;
+
+	// Sun
+	size_t sun_idx = add_planet({0.0f, 0.0f, 0.0f}, 1.5f, YellowSun, "Sun");
+
+	// Planets
+	size_t mercury_idx = add_planet({base_distance * 2.0f, 0.0f, 0.0f}, 0.25f, MercuryMat, "Mercury");
+	add_orbit(mercury_idx, SIZE_MAX, base_distance * 2.0f, 0.206f, 29.0f, 0.24f);
+
+	size_t venus_idx = add_planet({base_distance * 3.0f, 0.0f, 0.0f}, 0.35f, VenusMat, "Venus");
+	add_orbit(venus_idx, SIZE_MAX, base_distance * 3.0f, 0.007f, 77.0f, 0.62f);
+
+	size_t earth_idx = add_planet({base_distance * 4.0f, 0.0f, 0.0f}, 0.4f, EarthMat, "Earth");
+	add_orbit(earth_idx, SIZE_MAX, base_distance * 4.0f, 0.017f, 0.0f, 1.0f);
+
+	size_t moon_idx = add_planet({base_distance * 4.6f, 0.0f, 0.0f}, 0.12f, MoonMat, "Moon");
+	add_orbit(moon_idx, earth_idx, 0.7f, 0.055f, 0.0f, 0.075f);
+
+	size_t mars_idx = add_planet({base_distance * 5.0f, 0.0f, 0.0f}, 0.3f, MarsMat, "Mars");
+	add_orbit(mars_idx, SIZE_MAX, base_distance * 5.0f, 0.093f, 49.0f, 1.88f);
+
+	size_t jupiter_idx = add_planet({base_distance * 7.0f, 0.0f, 0.0f}, 0.9f, JupiterMat, "Jupiter");
+	add_orbit(jupiter_idx, SIZE_MAX, base_distance * 7.0f, 0.048f, 100.0f, 11.86f);
+
+	size_t saturn_idx = add_planet({base_distance * 9.0f, 0.0f, 0.0f}, 0.8f, SaturnMat, "Saturn");
+	add_orbit(saturn_idx, SIZE_MAX, base_distance * 9.0f, 0.054f, 113.0f, 29.46f);
+
+	// Saturn ring
+	Ring({0.0f, 0.0f, 0.0f}, 1.0f, 1.6f, 64, RingMat, "Saturn Ring");
+	size_t ring_idx = models.size() - 1;
+	add_orbit(ring_idx, saturn_idx, 0.0f, 0.0f, 0.0f, 1.0f); // stick to Saturn
+
+	size_t uranus_idx = add_planet({base_distance * 11.0f, 0.0f, 0.0f}, 0.7f, UranusMat, "Uranus");
+	add_orbit(uranus_idx, SIZE_MAX, base_distance * 11.0f, 0.047f, 74.0f, 84.01f);
+
+	size_t neptune_idx = add_planet({base_distance * 13.0f, 0.0f, 0.0f}, 0.7f, NeptuneMat, "Neptune");
+	add_orbit(neptune_idx, SIZE_MAX, base_distance * 13.0f, 0.009f, 131.0f, 164.79f);
 }
 
 // NOTE: Destroy resources here, do not cause leaks in your program!
@@ -840,6 +1077,9 @@ namespace {
 	PointLight point_lights[8];
 	uint32_t spotlight_count = 1;
 	Spotlight spotlights[4];
+	float orbit_speedup = 2.0f;
+	veekay::vec4 sun_base_color = {2.5f, 2.3f, 1.6f, 0.0f};
+	float sun_intensity = 1.0f;
 }
 void update(double time) {
     static int selectedModelIndex = 0;
@@ -902,18 +1142,14 @@ void update(double time) {
         }
 	}
 
+	ImGui::SliderFloat("Orbit speedup", &orbit_speedup, 0.1f, 50.0f, "%.1f");
+	ImGui::SliderFloat("Sun intensity", &sun_intensity, 0.1f, 5.0f, "%.1f");
+
 	ImGui::Separator();
 	
 	// Ambient light
 	ImGui::Text("Ambient Light");
 	ImGui::ColorEdit3("Ambient Color", &lighting_params.ambient_color.x);
-	
-	ImGui::Separator();
-	
-	// Directional light
-	ImGui::Text("Directional Light");
-	ImGui::DragFloat3("Direction", &lighting_params.directional_light.direction.x, 0.01f, -1.0f, 1.0f);
-	ImGui::ColorEdit3("Directional Color", &lighting_params.directional_light.color.x);
 	
 	ImGui::Separator();
 	
@@ -977,7 +1213,6 @@ void update(double time) {
 		using namespace veekay::input;
 
 		if (mouse::isButtonDown(mouse::Button::left)) {
-
 			auto view = (camera.LookAt) ? camera.lookAt_view() : camera.view();
 			veekay::vec3 right = {view[0][0], view[1][0], view[2][0]};
 			veekay::vec3 up    = {view[0][1], view[1][1], view[2][1]};
@@ -1011,37 +1246,48 @@ void update(double time) {
 
 	float aspect_ratio = float(veekay::app.window_width) / float(veekay::app.window_height);
 
-	// создаем источники первый раз
-	if (!first) {
-		lighting_params.ambient_color = veekay::vec4{0.1f, 0.1f, 0.1f, 0.0f};
-		
-		// Directional light
-		veekay::vec3 dir = veekay::vec3::normalized(veekay::vec3{0.0f, -1.0f, 0.0f});
-		lighting_params.directional_light.direction = veekay::vec4{dir.x, dir.y, dir.z, 0.0f};
-		lighting_params.directional_light.color = veekay::vec4{0.8f, 0.8f, 0.7f, 0.0f};
-		
-		// Point light
-		point_light_count = 1;
-		point_lights[0].position = veekay::vec4{0.0f, -0.5f, 0.0f, 0.0f};
-		point_lights[0].color = veekay::vec4{1.0f, 1.0f, 1.0f, 0.0f};
-		
-		// Spotlight
-		spotlight_count = 1;
-		float inner_angle_rad = toRadians(20.0f);
-		float outer_angle_rad = toRadians(25.0f);
-		spotlights[0].position = veekay::vec4{-2.0f, -2.0f, -1.5f, 0.0f};
-		veekay::vec3 spot_dir = veekay::vec3::normalized(veekay::vec3{-0.6f, 1.0f, 0.0f});
-		spotlights[0].direction = veekay::vec4{spot_dir.x, spot_dir.y, spot_dir.z, 0.0f};
-		spotlights[0].color = veekay::vec4{1.0f, 0.0f, 0.9f, 0.0f};
-		spotlights[0].cone_angles = veekay::vec4{
-			std::cos(inner_angle_rad),
-			std::cos(outer_angle_rad),
-			0.0f,
-			0.0f
-		};
-		
-		first = true;
-	}
+		// создаем источники первый раз
+		if (!first) {
+			lighting_params.ambient_color = veekay::vec4{0.1f, 0.1f, 0.1f, 0.0f};
+			
+			// Point light
+			point_light_count = 1;
+			point_lights[0].position = veekay::vec4{0.0f, 0.0f, 0.0f, 0.0f};
+			point_lights[0].color = veekay::vec4{
+				sun_base_color.x * sun_intensity,
+				sun_base_color.y * sun_intensity,
+				sun_base_color.z * sun_intensity,
+				0.0f}; // bright sun
+			
+			// Spotlights from above for fill
+			spotlight_count = 2;
+			float inner_angle_rad = toRadians(25.0f);
+			float outer_angle_rad = toRadians(40.0f);
+
+			spotlights[0].position = veekay::vec4{0.0f, 8.0f, 0.0f, 0.0f};
+			veekay::vec3 spot_dir0 = veekay::vec3::normalized(veekay::vec3{0.0f, -1.0f, 0.0f});
+			spotlights[0].direction = veekay::vec4{spot_dir0.x, spot_dir0.y, spot_dir0.z, 0.0f};
+			spotlights[0].color = veekay::vec4{0.8f, 0.8f, 0.9f, 0.0f};
+			spotlights[0].cone_angles = veekay::vec4{
+				std::cos(inner_angle_rad),
+				std::cos(outer_angle_rad),
+				0.0f,
+				0.0f
+			};
+
+			spotlights[1].position = veekay::vec4{0.0f, 8.0f, 8.0f, 0.0f};
+			veekay::vec3 spot_dir1 = veekay::vec3::normalized(veekay::vec3{0.0f, -1.0f, -1.0f});
+			spotlights[1].direction = veekay::vec4{spot_dir1.x, spot_dir1.y, spot_dir1.z, 0.0f};
+			spotlights[1].color = veekay::vec4{0.7f, 0.7f, 0.8f, 0.0f};
+			spotlights[1].cone_angles = veekay::vec4{
+				std::cos(inner_angle_rad),
+				std::cos(outer_angle_rad),
+				0.0f,
+				0.0f
+			};
+			
+			first = true;
+		}
 	veekay::vec3 dir = veekay::vec3::normalized(veekay::vec3{
 		lighting_params.directional_light.direction.x,
 		lighting_params.directional_light.direction.y,
@@ -1057,6 +1303,38 @@ void update(double time) {
 			spotlights[i].direction.z
 		});
 		spotlights[i].direction = veekay::vec4{spot_dir.x, spot_dir.y, spot_dir.z, 0.0f};
+	}
+
+	if (point_light_count > 0) {
+		point_lights[0].color = veekay::vec4{
+			sun_base_color.x * sun_intensity,
+			sun_base_color.y * sun_intensity,
+			sun_base_color.z * sun_intensity,
+			0.0f};
+	}
+
+	// Update orbital positions
+	double sim_years = time * (orbit_speedup * 0.1);
+	for (const auto& orbit : orbits) {
+		if (orbit.model_index >= models.size()) continue;
+
+		veekay::vec3 center = {0.0f, 0.0f, 0.0f};
+		if (orbit.parent_index != SIZE_MAX && orbit.parent_index < models.size()) {
+			center = models[orbit.parent_index].transform.position;
+		}
+
+		auto angle = float(sim_years * orbit.omega + orbit.phase);
+
+		float x_temp = orbit.a * std::cos(angle);
+		float z_temp = orbit.b * std::sin(angle);
+
+		float cos_r = std::cos(orbit.rotation_rad);
+		float sin_r = std::sin(orbit.rotation_rad);
+
+		float x = x_temp * cos_r - z_temp * sin_r;
+		float z = x_temp * sin_r + z_temp * cos_r;
+
+		models[orbit.model_index].transform.position = center + veekay::vec3{x, 0.0f, z};
 	}
 
 	SceneUniforms scene_uniforms{
@@ -1116,9 +1394,6 @@ void update(double time) {
 		}
 	}
 
-	models[1].animate_rotate({0,1,0},time);
-	models[2].animate_rotate({0,1,0},time);
-	models[3].animate_rotate({0,1,0},time);
 }
 
 void render(VkCommandBuffer cmd, VkFramebuffer framebuffer) {
