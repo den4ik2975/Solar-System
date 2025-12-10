@@ -66,6 +66,12 @@ void main() {
 	vec3 k_d = model_data.albedo_color.xyz; // Diffuse
 	vec3 k_s = model_data.specular_color.xyz; // Specular
 	float shininess = model_data.material.x; // Shininess
+
+	// Unlit/emissive if shininess is negative (used for the Sun mesh)
+	if (shininess < 0.0) {
+		final_color = vec4(k_d, 1.0);
+		return;
+	}
 	
 	vec3 ambient = scene.lighting.ambient_color.xyz * k_a;
 	vec3 result = ambient;

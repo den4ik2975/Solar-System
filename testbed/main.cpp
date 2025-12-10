@@ -119,7 +119,7 @@ Material MediumRed = {
 Material YellowSun = {
 	.albedo_color = veekay::vec3{1.0f, 0.9f, 0.4f},
 	.specular_color = veekay::vec3{1.0f, 0.9f, 0.6f},
-	.shininess = 128.0f
+	.shininess = -1.0f // negative signals unlit/emissive
 };
 
 Material MercuryMat = {
@@ -1085,6 +1085,12 @@ void update(double time) {
     static int selectedModelIndex = 0;
 	static bool first = false;
 
+	// Ensure UI edits the unscaled sun base color
+	if (point_light_count > 0) {
+		point_lights[0].color = sun_base_color;
+		point_lights[0].color.w = 0.0f;
+	}
+
 	ImGui::Begin("Controls:");
 	ImGui::DragFloat3("Camera pos", reinterpret_cast<float *>(&camera.position));
 	ImGui::DragFloat3("Camera rot", reinterpret_cast<float *>(&camera.rotation));
@@ -1143,7 +1149,7 @@ void update(double time) {
 	}
 
 	ImGui::SliderFloat("Orbit speedup", &orbit_speedup, 0.1f, 50.0f, "%.1f");
-	ImGui::SliderFloat("Sun intensity", &sun_intensity, 0.1f, 5.0f, "%.1f");
+	ImGui::SliderFloat("Sun intensity", &sun_intensity, 0.1f, 20.0f, "%.1f");
 
 	ImGui::Separator();
 	
@@ -1159,16 +1165,21 @@ void update(double time) {
 	if (ImGui::DragInt("Point Light Count", &point_count_int, 1.0f, 0, 8)) {
 		point_light_count = uint32_t(std::max(0, std::min(8, point_count_int)));
 	}
-	for (uint32_t i = 0; i < point_light_count && i < 8; i++) {
-		ImGui::PushID(int(i));
-		ImGui::Text("Point Light %u", i);
-		ImGui::DragFloat3("Position", &point_lights[i].position.x, 0.1f);
-		ImGui::ColorEdit3("Color", &point_lights[i].color.x);
-		ImGui::PopID();
-	}
-	
+		for (uint32_t i = 0; i < point_light_count && i < 8; i++) {
+			ImGui::PushID(int(i));
+			ImGui::Text("Point Light %u", i);
+			ImGui::DragFloat3("Position", &point_lights[i].position.x, 0.1f);
+			ImGui::ColorEdit3("Color", &point_lights[i].color.x);
+			ImGui::PopID();
+		}
+		
 	ImGui::Separator();
-	
+
+	if (point_light_count > 0) {
+		sun_base_color = point_lights[0].color;
+		sun_base_color.w = 0.0f;
+	}
+
 	// Spotlights
 	ImGui::Text("Spotlights");
 	int spot_count_int = int(spotlight_count);
@@ -1253,11 +1264,7 @@ void update(double time) {
 			// Point light
 			point_light_count = 1;
 			point_lights[0].position = veekay::vec4{0.0f, 0.0f, 0.0f, 0.0f};
-			point_lights[0].color = veekay::vec4{
-				sun_base_color.x * sun_intensity,
-				sun_base_color.y * sun_intensity,
-				sun_base_color.z * sun_intensity,
-				0.0f}; // bright sun
+			point_lights[0].color = sun_base_color; // UI-driven color
 			
 			// Spotlights from above for fill
 			spotlight_count = 2;
@@ -1305,6 +1312,7 @@ void update(double time) {
 		spotlights[i].direction = veekay::vec4{spot_dir.x, spot_dir.y, spot_dir.z, 0.0f};
 	}
 
+	// Apply sun intensity to the first point light color but keep user-editable base
 	if (point_light_count > 0) {
 		point_lights[0].color = veekay::vec4{
 			sun_base_color.x * sun_intensity,
