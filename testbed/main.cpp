@@ -145,12 +145,33 @@ struct Camera {
 	veekay::mat4 view_projection(float aspect_ratio) const;
 };
 
+struct CameraState {
+	veekay::vec3 position{};
+	veekay::vec3 rotation{};
+	veekay::vec3 target{};
+};
+
 // NOTE: Scene objects
 inline namespace {
 	Camera camera{
 		.position = {0.0f, -0.5f, -5.0f},
         .rotation = {0.0f, 0.0f, 0.0f}  // x pitch = 0°, y  yaw = 0°, roll = 0° 
 	};
+
+	CameraState lookat_state{
+		.position = camera.position,
+		.rotation = camera.rotation,
+		.target = camera.target_position,
+	};
+
+	CameraState transform_state{
+		.position = camera.position,
+		.rotation = camera.rotation,
+		.target = camera.target_position,
+	};
+
+	bool lookat_state_valid = true;
+	bool transform_state_valid = true;
 
 	std::vector<Model> models;
 }
@@ -301,33 +322,31 @@ veekay::mat4 Camera::view() const {
     veekay::mat4 rot_y = veekay::mat4::rotation(veekay::vec3{0.0f, 1.0f, 0.0f}, -toRadians(rotation.y));
     veekay::mat4 rot_z = veekay::mat4::rotation(veekay::vec3{0.0f, 0.0f, 1.0f}, -toRadians(rotation.z));
 
-    // матрица вращения
     veekay::mat4 rotation_matrix = rot_y * rot_x * rot_z;
-    
-    // Обратное перемещение
     veekay::mat4 translation_matrix = veekay::mat4::translation(-position);
 
-    // View матрица: Rotation * Translation
+    // Match existing row-major style: T^-1 then R^-1
     return translation_matrix * rotation_matrix;
 }
 
 veekay::mat4 Camera::lookAt_view() const{
-    // Вычисляем вектор направления от камеры к цели
-    veekay::vec3 forward = target_position - camera.position;
+    veekay::vec3 forward = target_position - position;
+
+	float forward_len_sq = forward.x * forward.x + forward.y * forward.y + forward.z * forward.z;
+	if (forward_len_sq < 1e-6f) {
+		forward = {0.0f, 0.0f, 1.0f};
+	}
     forward = veekay::vec3::normalized(forward);
 
-    // старая ось вверх
     veekay::vec3 up = {0.0f, 1.0f, 0.0f};
-
-    // Вычисляем правую ось (right) как векторное произведение up x forward
     veekay::vec3 right = veekay::vec3::cross(up, forward);
+	float right_len_sq = right.x * right.x + right.y * right.y + right.z * right.z;
+	if (right_len_sq < 1e-6f) {
+		right = {1.0f, 0.0f, 0.0f};
+	}
     right = veekay::vec3::normalized(right);
+    up = veekay::vec3::normalized(veekay::vec3::cross(forward, right));
 
-	// новая ось вверх
-    up = veekay::vec3::cross(forward, right);
-    up = veekay::vec3::normalized(up);
-
-    // собираем матрицу R
 	veekay::mat4 r_matrix = veekay::mat4::identity();
     r_matrix.elements[0][0] = right.x;
     r_matrix.elements[1][0] = right.y;
@@ -341,7 +360,7 @@ veekay::mat4 Camera::lookAt_view() const{
     r_matrix.elements[1][2] = forward.y;
     r_matrix.elements[2][2] = forward.z;
 
-    veekay::mat4 translation_matrix = veekay::mat4::translation(-camera.position);
+    veekay::mat4 translation_matrix = veekay::mat4::translation(-position);
 
 	return translation_matrix * r_matrix;
 }
@@ -829,8 +848,43 @@ void update(double time) {
 	ImGui::Begin("Controls:");
 	ImGui::DragFloat3("Camera pos", reinterpret_cast<float *>(&camera.position));
 	ImGui::DragFloat3("Camera rot", reinterpret_cast<float *>(&camera.rotation));
-	ImGui::InputFloat3("Camera target pos", reinterpret_cast<float *>(&models[selectedModelIndex].transform.position));
+	ImGui::InputFloat3("Look-at target", reinterpret_cast<float *>(&camera.target_position));
+
+	bool previousLookAt = camera.LookAt;
 	ImGui::Checkbox("Look-at mode", &camera.LookAt);
+	if (previousLookAt != camera.LookAt) {
+		if (previousLookAt) {
+			lookat_state = {
+				.position = camera.position,
+				.rotation = camera.rotation,
+				.target = camera.target_position,
+			};
+			lookat_state_valid = true;
+
+			if (transform_state_valid) {
+				camera.position = transform_state.position;
+				camera.rotation = transform_state.rotation;
+				camera.target_position = transform_state.target;
+			}
+		} else {
+			transform_state = {
+				.position = camera.position,
+				.rotation = camera.rotation,
+				.target = camera.target_position,
+			};
+			transform_state_valid = true;
+
+			if (lookat_state_valid) {
+				camera.position = lookat_state.position;
+				camera.rotation = lookat_state.rotation;
+				camera.target_position = lookat_state.target;
+			} else if (!models.empty()) {
+				size_t clamped_index = std::min<size_t>(selectedModelIndex, models.size() - 1);
+				camera.target_position = models[clamped_index].transform.position;
+			}
+		}
+	}
+
 	if (camera.LookAt && !models.empty()) {
         ImGui::Text("Target:");
         if (ImGui::BeginCombo("##CameraTarget", ("Model " + models[selectedModelIndex].title).c_str())) {
@@ -838,7 +892,11 @@ void update(double time) {
                 bool isSelected = (selectedModelIndex == (int)i);
                 if (ImGui::Selectable(("Model " + models[i].title).c_str(), isSelected)) {
                     selectedModelIndex = (int)i;
+					camera.target_position = models[selectedModelIndex].transform.position;
                 }
+                if (isSelected) {
+					ImGui::SetItemDefaultFocus();
+				}
             }
             ImGui::EndCombo();
         }
@@ -925,12 +983,10 @@ void update(double time) {
 			veekay::vec3 up    = {view[0][1], view[1][1], view[2][1]};
 			veekay::vec3 front = {-view[0][2], -view[1][2], -view[2][2]};
 
-			if(!camera.LookAt){
+			if (!camera.LookAt) {
 				auto delta = mouse::cursorDelta();
 				camera.rotation.y += delta.x * 0.2f;
     			camera.rotation.x -= delta.y * 0.2f;
-			}else{
-				camera.target_position = models[selectedModelIndex].transform.position;
 			}
 
 			if (keyboard::isKeyDown(keyboard::Key::w))
