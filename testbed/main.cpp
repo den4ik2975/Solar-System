@@ -433,12 +433,12 @@ struct Ring : Model {
 		for (uint32_t i = 0; i < segments; ++i) {
 			uint32_t start = i * 2;
 			indices.push_back(start);
-			indices.push_back(start + 1);
 			indices.push_back(start + 2);
+			indices.push_back(start + 1);
 
 			indices.push_back(start + 1);
-			indices.push_back(start + 3);
 			indices.push_back(start + 2);
+			indices.push_back(start + 3);
 		}
 
 		mesh.vertex_buffer = new veekay::graphics::Buffer(
@@ -983,7 +983,7 @@ void initialize(VkCommandBuffer cmd) {
 	}
 
 	// Scene setup: solar system
-	Plane({0.0f, 0.0f, 0.0f}, Standart, "Ecliptic");
+	// Plane({0.0f, 0.0f, 0.0f}, Standart, "Ecliptic");
 
 	const auto add_orbit = [&](size_t model_index, size_t parent_index, float a, float e, float rotation_deg, float period_years, float phase = 0.0f) {
 		float b = a * std::sqrt(1.0f - e * e);
@@ -1034,7 +1034,7 @@ void initialize(VkCommandBuffer cmd) {
 	add_orbit(saturn_idx, SIZE_MAX, base_distance * 9.0f, 0.054f, 113.0f, 29.46f);
 
 	// Saturn ring
-	Ring({0.0f, 0.0f, 0.0f}, 1.0f, 1.6f, 64, RingMat, "Saturn Ring");
+			Ring({0.0f, 0.0f, 0.0f}, 1.0f, 1.6f, 64, RingMat, "Saturn Ring");
 	size_t ring_idx = models.size() - 1;
 	add_orbit(ring_idx, saturn_idx, 0.0f, 0.0f, 0.0f, 1.0f); // stick to Saturn
 
@@ -1080,6 +1080,13 @@ namespace {
 	float orbit_speedup = 2.0f;
 	veekay::vec4 sun_base_color = {2.5f, 2.3f, 1.6f, 0.0f};
 	float sun_intensity = 1.0f;
+	veekay::vec4 spotlight_base_color[4] = {
+		{0.8f, 0.8f, 0.9f, 0.0f},
+		{0.7f, 0.7f, 0.8f, 0.0f},
+		{0.7f, 0.8f, 0.9f, 0.0f},
+		{0.8f, 0.7f, 0.8f, 0.0f},
+	};
+	float spotlight_intensity[4] = {20.0f, 20.0f, 20.0f, 20.0f};
 }
 void update(double time) {
     static int selectedModelIndex = 0;
@@ -1089,6 +1096,10 @@ void update(double time) {
 	if (point_light_count > 0) {
 		point_lights[0].color = sun_base_color;
 		point_lights[0].color.w = 0.0f;
+	}
+	for (uint32_t i = 0; i < spotlight_count && i < 4; ++i) {
+		spotlights[i].color = spotlight_base_color[i];
+		spotlights[i].color.w = 0.0f;
 	}
 
 	ImGui::Begin("Controls:");
@@ -1165,14 +1176,14 @@ void update(double time) {
 	if (ImGui::DragInt("Point Light Count", &point_count_int, 1.0f, 0, 8)) {
 		point_light_count = uint32_t(std::max(0, std::min(8, point_count_int)));
 	}
-		for (uint32_t i = 0; i < point_light_count && i < 8; i++) {
-			ImGui::PushID(int(i));
-			ImGui::Text("Point Light %u", i);
-			ImGui::DragFloat3("Position", &point_lights[i].position.x, 0.1f);
-			ImGui::ColorEdit3("Color", &point_lights[i].color.x);
-			ImGui::PopID();
-		}
-		
+	for (uint32_t i = 0; i < point_light_count && i < 8; i++) {
+		ImGui::PushID(int(i));
+		ImGui::Text("Point Light %u", i);
+		ImGui::DragFloat3("Position", &point_lights[i].position.x, 0.1f);
+		ImGui::ColorEdit3("Color", &point_lights[i].color.x);
+		ImGui::PopID();
+	}
+	
 	ImGui::Separator();
 
 	if (point_light_count > 0) {
@@ -1195,6 +1206,8 @@ void update(double time) {
 			spotlights[i].position = veekay::vec4{0.0f, 0.0f, 0.0f, 0.0f};
 			spotlights[i].direction = veekay::vec4{0.0f, 0.0f, -1.0f, 0.0f}; // важное: не нулевой вектор
 			spotlights[i].color = veekay::vec4{1.0f, 1.0f, 1.0f, 0.0f};
+			spotlight_base_color[i] = spotlights[i].color;
+			spotlight_intensity[i] = 1.0f;
 			spotlights[i].cone_angles = veekay::vec4{
 				std::cos(toRadians(20.0f)),  // inner
 				std::cos(toRadians(25.0f)),  // outer
@@ -1208,6 +1221,7 @@ void update(double time) {
 		ImGui::DragFloat3("Position", &spotlights[i].position.x, 0.1f);
 		ImGui::DragFloat3("Direction", &spotlights[i].direction.x, 0.01f, -1.0f, 1.0f);
 		ImGui::ColorEdit3("Color", &spotlights[i].color.x);
+		ImGui::SliderFloat("Intensity", &spotlight_intensity[i], 0.0f, 20.0f);
 		float inner_deg = std::acos(spotlights[i].cone_angles.x) * 180.0f / float(M_PI);
 		float outer_deg = std::acos(spotlights[i].cone_angles.y) * 180.0f / float(M_PI);
 		if (ImGui::DragFloat("Inner Angle (deg)", &inner_deg, 1.0f, 0.0f, 90.0f)) {
@@ -1219,6 +1233,11 @@ void update(double time) {
 		ImGui::PopID();
 	}
 	ImGui::End();
+
+	for (uint32_t i = 0; i < spotlight_count && i < 4; ++i) {
+		spotlight_base_color[i] = spotlights[i].color;
+		spotlight_base_color[i].w = 0.0f;
+	}
 
 	if (!ImGui::IsWindowHovered()) {
 		using namespace veekay::input;
@@ -1267,14 +1286,14 @@ void update(double time) {
 			point_lights[0].color = sun_base_color; // UI-driven color
 			
 			// Spotlights from above for fill
-			spotlight_count = 2;
+			spotlight_count = 4;
 			float inner_angle_rad = toRadians(25.0f);
 			float outer_angle_rad = toRadians(40.0f);
 
-			spotlights[0].position = veekay::vec4{0.0f, 8.0f, 0.0f, 0.0f};
-			veekay::vec3 spot_dir0 = veekay::vec3::normalized(veekay::vec3{0.0f, -1.0f, 0.0f});
+			spotlights[0].position = veekay::vec4{-5.0f, -10.0f, -5.0f, 0.0f};
+			veekay::vec3 spot_dir0 = veekay::vec3::normalized(veekay::vec3{0.0f, 1.0f, 0.0f});
 			spotlights[0].direction = veekay::vec4{spot_dir0.x, spot_dir0.y, spot_dir0.z, 0.0f};
-			spotlights[0].color = veekay::vec4{0.8f, 0.8f, 0.9f, 0.0f};
+			spotlights[0].color = spotlight_base_color[0];
 			spotlights[0].cone_angles = veekay::vec4{
 				std::cos(inner_angle_rad),
 				std::cos(outer_angle_rad),
@@ -1282,11 +1301,33 @@ void update(double time) {
 				0.0f
 			};
 
-			spotlights[1].position = veekay::vec4{0.0f, 8.0f, 8.0f, 0.0f};
-			veekay::vec3 spot_dir1 = veekay::vec3::normalized(veekay::vec3{0.0f, -1.0f, -1.0f});
+			spotlights[1].position = veekay::vec4{5.0f, -10.0f, 5.0f, 0.0f};
+			veekay::vec3 spot_dir1 = veekay::vec3::normalized(veekay::vec3{0.0f, 1.0f, 0.0f});
 			spotlights[1].direction = veekay::vec4{spot_dir1.x, spot_dir1.y, spot_dir1.z, 0.0f};
-			spotlights[1].color = veekay::vec4{0.7f, 0.7f, 0.8f, 0.0f};
+			spotlights[1].color = spotlight_base_color[1];
 			spotlights[1].cone_angles = veekay::vec4{
+				std::cos(inner_angle_rad),
+				std::cos(outer_angle_rad),
+				0.0f,
+				0.0f
+			};
+
+			spotlights[2].position = veekay::vec4{5.0f, -10.0f, -5.0f, 0.0f};
+			veekay::vec3 spot_dir2 = veekay::vec3::normalized(veekay::vec3{0.0f, 1.0f, 0.0f});
+			spotlights[2].direction = veekay::vec4{spot_dir2.x, spot_dir2.y, spot_dir2.z, 0.0f};
+			spotlights[2].color = spotlight_base_color[2];
+			spotlights[2].cone_angles = veekay::vec4{
+				std::cos(inner_angle_rad),
+				std::cos(outer_angle_rad),
+				0.0f,
+				0.0f
+			};
+
+			spotlights[3].position = veekay::vec4{-5.0f, 10.0f, 5.0f, 0.0f};
+			veekay::vec3 spot_dir3 = veekay::vec3::normalized(veekay::vec3{0.0f, 1.0f, 0.0f});
+			spotlights[3].direction = veekay::vec4{spot_dir3.x, spot_dir3.y, spot_dir3.z, 0.0f};
+			spotlights[3].color = spotlight_base_color[3];
+			spotlights[3].cone_angles = veekay::vec4{
 				std::cos(inner_angle_rad),
 				std::cos(outer_angle_rad),
 				0.0f,
@@ -1295,14 +1336,7 @@ void update(double time) {
 			
 			first = true;
 		}
-	veekay::vec3 dir = veekay::vec3::normalized(veekay::vec3{
-		lighting_params.directional_light.direction.x,
-		lighting_params.directional_light.direction.y,
-		lighting_params.directional_light.direction.z
-	});
-	lighting_params.directional_light.direction = veekay::vec4{dir.x, dir.y, dir.z, 0.0f};
-	
-	// Normalize spotlight directions
+	// Normalize spotlight directions and apply intensity to base color
 	for (uint32_t i = 0; i < spotlight_count && i < 4; i++) {
 		veekay::vec3 spot_dir = veekay::vec3::normalized(veekay::vec3{
 			spotlights[i].direction.x,
@@ -1310,6 +1344,11 @@ void update(double time) {
 			spotlights[i].direction.z
 		});
 		spotlights[i].direction = veekay::vec4{spot_dir.x, spot_dir.y, spot_dir.z, 0.0f};
+		spotlights[i].color = veekay::vec4{
+			spotlight_base_color[i].x * spotlight_intensity[i],
+			spotlight_base_color[i].y * spotlight_intensity[i],
+			spotlight_base_color[i].z * spotlight_intensity[i],
+			0.0f};
 	}
 
 	// Apply sun intensity to the first point light color but keep user-editable base
