@@ -6,6 +6,8 @@
 #include <iostream>
 #include <fstream>
 #include <cmath>
+#include <random>
+#include <chrono>
 
 #include <veekay/veekay.hpp>
 
@@ -74,7 +76,7 @@ struct Transform {
 	veekay::mat4 matrix() const;
 };
 
-struct GameObject {
+	struct GameObject {
 	Transform transform;
 
 	void animate_rotate(veekay::vec3 direction, double time)
@@ -182,6 +184,24 @@ Material RingMat = {
 	.shininess = 32.0f
 };
 
+Material StarMat = {
+	.albedo_color = veekay::vec3{1.0f, 1.0f, 1.0f},
+	.specular_color = veekay::vec3{0.0f, 0.0f, 0.0f},
+	.shininess = -1.0f // эмиссивные звёзды
+};
+
+Material CometHeadMat = {
+	.albedo_color = veekay::vec3{0.8f, 0.9f, 1.0f},
+	.specular_color = veekay::vec3{0.0f, 0.0f, 0.0f},
+	.shininess = -1.0f // эмиссивная голова
+};
+
+Material CometTailMat = {
+	.albedo_color = veekay::vec3{0.4f, 0.7f, 1.0f},
+	.specular_color = veekay::vec3{0.0f, 0.0f, 0.0f},
+	.shininess = -1.0f // эмиссивный хвост
+};
+
 struct Model : GameObject {
 	Mesh mesh;
 	std::string title;
@@ -228,12 +248,32 @@ struct Orbit {
 	float phase;
 };
 
-// NOTE: Scene objects
-inline namespace {
-	Camera camera{
-		.position = {0.0f, -0.5f, -5.0f},
+struct StarInstance {
+	size_t model_index;
+	float time = 0.0f;
+	float lifetime = 1.0f;
+	veekay::vec3 base_color;
+};
+
+struct CometInstance {
+	size_t model_index = SIZE_MAX; // вытянутая форма кометы целиком
+	float radius = 0.1f;
+	float tail_base_stretch = 1.0f;
+	veekay::vec3 start{};
+	veekay::vec3 end{};
+	veekay::vec3 dir{};
+	float duration = 1.0f;
+	float t = 0.0f;
+	float tail_length = 1.0f;
+	uint32_t light_slot = 0; // индекс в point_lights (для головы)
+};
+
+	// NOTE: Scene objects
+	inline namespace {
+		Camera camera{
+			.position = {0.0f, -2.0f, -12.0f},
         .rotation = {0.0f, 0.0f, 0.0f}  // x pitch = 0°, y  yaw = 0°, roll = 0° 
-	};
+		};
 
 	CameraState lookat_state{
 		.position = camera.position,
@@ -414,6 +454,113 @@ struct Sphere : Model {
 	}
 };
 
+// Процедурная "вытянутая сфера": первая половина — обычная сфера, вторая плавно вытягивается в хвост
+Mesh make_stretched_sphere_mesh(float radius, float stretch, uint32_t stacks, uint32_t slices) {
+	Mesh mesh{};
+	struct ProfilePoint {
+		float r;
+		float z;
+	};
+
+	std::vector<ProfilePoint> profile(stacks + 1);
+	auto smoothstep = [](float x) {
+		return x * x * (3.0f - 2.0f * x);
+	};
+
+	for (uint32_t i = 0; i <= stacks; ++i) {
+		float t = float(i) / float(stacks);
+		if (t <= 0.5f) {
+			float phi = t * float(M_PI); // 0..pi/2
+			float r = std::sin(phi) * radius;
+			float z = std::cos(phi) * radius - radius; // нос в z=0
+			profile[i] = {r, z};
+		} else {
+			float k = (t - 0.5f) / 0.5f; // 0..1
+			float ease = smoothstep(k);
+			float r = radius * (1.0f - ease);
+			float z = -radius - ease * stretch;
+			profile[i] = {r, z};
+		}
+	}
+
+	std::vector<float> r_deriv(stacks + 1, 0.0f);
+	for (uint32_t i = 0; i <= stacks; ++i) {
+		if (i == 0) {
+			float dz = profile[i + 1].z - profile[i].z;
+			if (std::abs(dz) < 1e-4f) dz = (dz >= 0.0f) ? 1e-4f : -1e-4f;
+			r_deriv[i] = (profile[i + 1].r - profile[i].r) / dz;
+		} else if (i == stacks) {
+			float dz = profile[i].z - profile[i - 1].z;
+			if (std::abs(dz) < 1e-4f) dz = (dz >= 0.0f) ? 1e-4f : -1e-4f;
+			r_deriv[i] = (profile[i].r - profile[i - 1].r) / dz;
+		} else {
+			float dz = profile[i + 1].z - profile[i - 1].z;
+			if (std::abs(dz) < 1e-4f) dz = (dz >= 0.0f) ? 1e-4f : -1e-4f;
+			r_deriv[i] = (profile[i + 1].r - profile[i - 1].r) / dz;
+		}
+	}
+
+	std::vector<Vertex> vertices;
+	std::vector<uint32_t> indices;
+	vertices.reserve((stacks + 1) * (slices + 1));
+	indices.reserve(stacks * slices * 6);
+
+	for (uint32_t i = 0; i <= stacks; ++i) {
+		float v = float(i) / float(stacks);
+		float r = profile[i].r;
+		float z = profile[i].z;
+		float r_prime = r_deriv[i];
+
+		for (uint32_t j = 0; j <= slices; ++j) {
+			float u = float(j) / float(slices);
+			float theta = u * float(M_PI) * 2.0f;
+			float c = std::cos(theta);
+			float s = std::sin(theta);
+
+			veekay::vec3 pos = {r * c, r * s, z};
+			veekay::vec3 normal = veekay::vec3::normalized({c, s, -r_prime});
+			vertices.push_back({pos, normal, {u, v}});
+		}
+	}
+
+	for (uint32_t i = 0; i < stacks; ++i) {
+		for (uint32_t j = 0; j < slices; ++j) {
+			uint32_t first = i * (slices + 1) + j;
+			uint32_t second = first + slices + 1;
+
+			indices.push_back(first);
+			indices.push_back(second);
+			indices.push_back(first + 1);
+
+			indices.push_back(second);
+			indices.push_back(second + 1);
+			indices.push_back(first + 1);
+		}
+	}
+
+	mesh.vertex_buffer = new veekay::graphics::Buffer(
+		vertices.size() * sizeof(Vertex), vertices.data(),
+		VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+
+	mesh.index_buffer = new veekay::graphics::Buffer(
+		indices.size() * sizeof(uint32_t), indices.data(),
+		VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+
+	mesh.indices = uint32_t(indices.size());
+	return mesh;
+}
+
+struct StretchedSphere : Model {
+	StretchedSphere(veekay::vec3 position, float radius, float stretch, uint32_t stacks, uint32_t slices, Material material, std::string title = "StretchedSphere")
+	{
+		mesh = make_stretched_sphere_mesh(radius, stretch, stacks, slices);
+		transform.position = position;
+		this->material = material;
+		this->title = title;
+		models.push_back(*this);
+	}
+};
+
 struct Ring : Model {
 	// 0.2 Плоское кольцо (Сатурн): внутренний/внешний радиусы + корректный порядок индексов для обзора сверху
 	Ring(veekay::vec3 position, float inner_radius, float outer_radius, uint32_t segments, Material material, std::string title = "Ring")
@@ -464,6 +611,65 @@ struct Ring : Model {
 	}
 };
 
+// Объявления генераторов случайных величин (реализация ниже)
+float randf(std::mt19937& rng, float a, float b);
+veekay::vec3 random_unit_vec(std::mt19937& rng);
+veekay::vec3 random_on_shell(std::mt19937& rng, float radius);
+
+struct StarSpawner {
+	float radius;
+	void respawn(StarInstance& star, std::mt19937& rng) const {
+		veekay::vec3 dir = random_unit_vec(rng);
+		star.model_index = star.model_index;
+		star.time = 0.0f;
+		star.lifetime = randf(rng, 1.0f, 3.0f);
+		star.base_color = veekay::vec3{randf(rng, 0.6f, 1.0f), randf(rng, 0.6f, 1.0f), 1.0f};
+		models[star.model_index].transform.position = dir * radius;
+		models[star.model_index].material.albedo_color = star.base_color;
+	}
+};
+
+struct CometSpawner {
+	float shell_radius;
+	float sun_safe_radius;
+	float min_duration;
+	float max_duration;
+	float tail_scale;
+
+	bool sample_path(veekay::vec3& start, veekay::vec3& end, std::mt19937& rng) const {
+		for (int i = 0; i < 16; ++i) {
+			start = random_on_shell(rng, shell_radius);
+			end = random_on_shell(rng, shell_radius);
+			veekay::vec3 seg = end - start;
+			float seg_len2 = seg.x * seg.x + seg.y * seg.y + seg.z * seg.z;
+			if (seg_len2 < 1e-6f) continue;
+			float t = -(start.x * seg.x + start.y * seg.y + start.z * seg.z) / seg_len2;
+			t = std::max(0.0f, std::min(1.0f, t));
+			veekay::vec3 closest = start + seg * t;
+			float dist2 = closest.x * closest.x + closest.y * closest.y + closest.z * closest.z;
+			if (dist2 >= sun_safe_radius * sun_safe_radius) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	void respawn(CometInstance& comet, std::mt19937& rng) const {
+		veekay::vec3 start, end;
+		if (!sample_path(start, end, rng)) {
+			start = {shell_radius, 0.0f, 0.0f};
+			end = {-shell_radius, 0.0f, 0.0f};
+		}
+		comet.start = start;
+		comet.end = end;
+		comet.dir = veekay::vec3::normalized(end - start);
+		comet.t = 0.0f;
+		comet.duration = randf(rng, min_duration, max_duration);
+		float distance = std::sqrt((end - start).x * (end - start).x + (end - start).y * (end - start).y + (end - start).z * (end - start).z);
+		comet.tail_length = distance * tail_scale;
+	}
+};
+
 // NOTE: Vulkan objects
 inline namespace {
 	VkShaderModule vertex_shader_module;
@@ -492,6 +698,25 @@ float toRadians(float degrees) {
 	return degrees * float(M_PI) / 180.0f;
 }
 
+float randf(std::mt19937& rng, float a, float b) {
+	std::uniform_real_distribution<float> dist(a, b);
+	return dist(rng);
+}
+
+veekay::vec3 random_unit_vec(std::mt19937& rng) {
+	float x = randf(rng, -1.0f, 1.0f);
+	float y = randf(rng, -1.0f, 1.0f);
+	float z = randf(rng, -1.0f, 1.0f);
+	veekay::vec3 v{x, y, z};
+	float len = std::sqrt(x * x + y * y + z * z);
+	if (len < 1e-5f) return {0.0f, 1.0f, 0.0f};
+	return v / len;
+}
+
+veekay::vec3 random_on_shell(std::mt19937& rng, float radius) {
+	return random_unit_vec(rng) * radius;
+}
+
 veekay::mat4 Transform::matrix() const {
     auto scale_mat = veekay::mat4::scaling(scale);
     
@@ -499,7 +724,7 @@ veekay::mat4 Transform::matrix() const {
     auto rot_y = veekay::mat4::rotation(veekay::vec3{0.0f, 1.0f, 0.0f}, toRadians(rotation.y));
     auto rot_z = veekay::mat4::rotation(veekay::vec3{0.0f, 0.0f, 1.0f}, toRadians(rotation.z));
     
-    auto rotation_mat = rot_z * rot_y * rot_x;
+	auto rotation_mat = rot_x * rot_y * rot_z;
     
     auto translation_mat = veekay::mat4::translation(position);
     
@@ -563,6 +788,40 @@ veekay::mat4 Camera::view_projection(float aspect_ratio) const {
 		return lookAt_view() * projection;
 	else
 		return view() * projection;
+}
+
+// Глобальные параметры сцены и источников света
+namespace {
+	LightingData lighting_params{};
+	uint32_t point_light_count = 1;
+	PointLight point_lights[8];
+	uint32_t spotlight_count = 1;
+	Spotlight spotlights[8];
+	float orbit_speedup = 2.0f;
+	veekay::vec4 sun_base_color = {2.5f, 2.3f, 1.6f, 0.0f};
+	float sun_intensity = 1.0f;
+	veekay::vec4 spotlight_base_color[8] = {
+		{0.8f, 0.8f, 0.9f, 0.0f},
+		{0.7f, 0.7f, 0.8f, 0.0f},
+		{0.7f, 0.8f, 0.9f, 0.0f},
+		{0.8f, 0.7f, 0.8f, 0.0f},
+		{0.8f, 0.8f, 0.9f, 0.0f},
+		{0.7f, 0.7f, 0.8f, 0.0f},
+		{0.7f, 0.8f, 0.9f, 0.0f},
+		{0.8f, 0.7f, 0.8f, 0.0f},
+	};
+	float spotlight_intensity[8] = {8.0f, 8.0f, 8.0f, 8.0f, 8.0f, 8.0f, 8.0f, 8.0f};
+	std::vector<StarInstance> stars;
+	std::vector<CometInstance> comets;
+	std::mt19937 rng{static_cast<uint32_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count())};
+	StarSpawner star_spawner{20.0f};
+	CometSpawner comet_spawner{
+		.shell_radius = 12.0f,
+		.sun_safe_radius = 2.0f,
+		.min_duration = 6.0f,
+		.max_duration = 12.0f,
+		.tail_scale = 0.5f
+	};
 }
 
 // NOTE: Loads shader byte code from file
@@ -893,7 +1152,7 @@ void initialize(VkCommandBuffer cmd) {
 		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
 	spotlights_buffer = new veekay::graphics::Buffer(
-		16 + sizeof(Spotlight) * 4,  // padded count + lights
+		16 + sizeof(Spotlight) * 8,  // padded count + lights
 		nullptr,
 		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
@@ -1012,7 +1271,7 @@ void initialize(VkCommandBuffer cmd) {
 	};
 
 		// Масштабируем расстояния под сцену
-		const float base_distance = 1.5f;
+		const float base_distance = 1.0f;
 
 		// Солнце
 		size_t sun_idx = add_planet({0.0f, 0.0f, 0.0f}, 1.5f, YellowSun, "Sun");
@@ -1044,12 +1303,40 @@ void initialize(VkCommandBuffer cmd) {
 		size_t ring_idx = models.size() - 1;
 		add_orbit(ring_idx, saturn_idx, 0.0f, 0.0f, 0.0f, 1.0f); // прицеплено к Сатурну
 
-	size_t uranus_idx = add_planet({base_distance * 11.0f, 0.0f, 0.0f}, 0.7f, UranusMat, "Uranus");
-	add_orbit(uranus_idx, SIZE_MAX, base_distance * 11.0f, 0.047f, 74.0f, 84.01f);
+		size_t uranus_idx = add_planet({base_distance * 11.0f, 0.0f, 0.0f}, 0.7f, UranusMat, "Uranus");
+		add_orbit(uranus_idx, SIZE_MAX, base_distance * 11.0f, 0.047f, 74.0f, 84.01f);
 
-	size_t neptune_idx = add_planet({base_distance * 13.0f, 0.0f, 0.0f}, 0.7f, NeptuneMat, "Neptune");
-	add_orbit(neptune_idx, SIZE_MAX, base_distance * 13.0f, 0.009f, 131.0f, 164.79f);
-}
+		size_t neptune_idx = add_planet({base_distance * 13.0f, 0.0f, 0.0f}, 0.7f, NeptuneMat, "Neptune");
+		add_orbit(neptune_idx, SIZE_MAX, base_distance * 13.0f, 0.009f, 131.0f, 164.79f);
+
+		// 0.1 Звёзды: 30 эмиссивных сфер на небесной сфере, перераспавн при окончании жизни
+		const int star_count = 50;
+		for (int i = 0; i < star_count; ++i) {
+			size_t idx_before = models.size();
+			Sphere({0.0f, 0.0f, 0.0f}, 0.05f, 8, 12, StarMat, "Star");
+			StarInstance s;
+			s.model_index = idx_before;
+			s.base_color = StarMat.albedo_color;
+			star_spawner.respawn(s, rng);
+			stars.push_back(s);
+		}
+
+		// 0.1 Кометы: до 2 штук, вытянутая модель + точечный свет в голове
+		const int comet_max = 2;
+		for (int i = 0; i < comet_max; ++i) {
+			const float comet_radius = 0.1f;
+			const float comet_base_stretch = 1.0f;
+			size_t model_idx_before = models.size();
+			StretchedSphere({0.0f, 0.0f, 0.0f}, comet_radius, comet_base_stretch, 20, 28, CometTailMat, "Comet");
+			CometInstance c;
+			c.model_index = model_idx_before;
+			c.radius = comet_radius;
+			c.tail_base_stretch = comet_base_stretch;
+			c.light_slot = static_cast<uint32_t>(1 + i); // слоты 1..2 под кометы (0 — Солнце)
+			comet_spawner.respawn(c, rng);
+			comets.push_back(c);
+		}
+	}
 
 // NOTE: Destroy resources here, do not cause leaks in your program!
 void shutdown() {
@@ -1077,33 +1364,22 @@ void shutdown() {
 	vkDestroyShaderModule(device, fragment_shader_module, nullptr);
 	vkDestroyShaderModule(device, vertex_shader_module, nullptr);
 }
-namespace {
-	LightingData lighting_params{};
-	uint32_t point_light_count = 1;
-	PointLight point_lights[8];
-	uint32_t spotlight_count = 1;
-	Spotlight spotlights[4];
-	float orbit_speedup = 2.0f;
-	veekay::vec4 sun_base_color = {2.5f, 2.3f, 1.6f, 0.0f};
-	float sun_intensity = 1.0f;
-	veekay::vec4 spotlight_base_color[4] = {
-		{0.8f, 0.8f, 0.9f, 0.0f},
-		{0.7f, 0.7f, 0.8f, 0.0f},
-		{0.7f, 0.8f, 0.9f, 0.0f},
-		{0.8f, 0.7f, 0.8f, 0.0f},
-	};
-	float spotlight_intensity[4] = {80.0f, 80.0f, 80.0f, 80.0f};
-}
 void update(double time) {
     static int selectedModelIndex = 0;
 	static bool first = false;
+	// 0.7 Дельта по времени между кадрами для анимации звёзд/комет и плавных респавнов
+	static double prev_time = time;
+	double dt = first ? (time - prev_time) : 0.0;
+	prev_time = time;
+	if (dt < 0.0) dt = 0.0;
+	float dt_f = static_cast<float>(dt);
 
 	// Готовим цвет Солнца без множителя, чтобы в UI редактировать базовое значение
 	if (point_light_count > 0) {
 		point_lights[0].color = sun_base_color;
 		point_lights[0].color.w = 0.0f;
 	}
-	for (uint32_t i = 0; i < spotlight_count && i < 4; ++i) {
+	for (uint32_t i = 0; i < spotlight_count && i < 8; ++i) {
 		spotlights[i].color = spotlight_base_color[i];
 		spotlights[i].color.w = 0.0f;
 	}
@@ -1202,14 +1478,12 @@ void update(double time) {
 	// Прожекторы
 	ImGui::Text("Spotlights");
 	int spot_count_int = int(spotlight_count);
-	if (ImGui::DragInt("Spotlight Count", &spot_count_int, 1.0f, 0, 4)) {
+	if (ImGui::DragInt("Spotlight Count", &spot_count_int, 1.0f, 0, 8)) {
 		uint32_t old_count = spotlight_count;
-		spotlight_count = uint32_t(std::max(0, std::min(4, spot_count_int)));
+		spotlight_count = uint32_t(std::max(0, std::min(8, spot_count_int)));
 
 		// Инициализируем новые источники, если количество увеличилось
 		for (uint32_t i = old_count; i < spotlight_count; ++i) {
-			if (i >= 4) break;
-
 			// Устанавливаем стандартные значения
 			spotlights[i].position = veekay::vec4{0.0f, 0.0f, 0.0f, 0.0f};
 			spotlights[i].direction = veekay::vec4{0.0f, 0.0f, -1.0f, 0.0f}; // важное: не нулевой вектор
@@ -1223,7 +1497,7 @@ void update(double time) {
 			};
 		}
 	}
-	for (uint32_t i = 0; i < spotlight_count && i < 4; i++) {
+	for (uint32_t i = 0; i < spotlight_count && i < 8; i++) {
 		ImGui::PushID(int(i + 8));
 		ImGui::Text("Spotlight %u", i);
 		ImGui::DragFloat3("Position", &spotlights[i].position.x, 0.1f);
@@ -1244,7 +1518,7 @@ void update(double time) {
 	ImGui::End();
 	
 	// 2.2 Управление камерой с клавиатуры/мыши вне UI окна
-	for (uint32_t i = 0; i < spotlight_count && i < 4; ++i) {
+	for (uint32_t i = 0; i < spotlight_count && i < 8; ++i) {
 		spotlight_base_color[i] = spotlights[i].color;
 		spotlight_base_color[i].w = 0.0f;
 	}
@@ -1295,59 +1569,37 @@ void update(double time) {
 			point_lights[0].position = veekay::vec4{0.0f, 0.0f, 0.0f, 0.0f};
 			point_lights[0].color = sun_base_color; // Цвет задаётся из UI
 			
-			// 2.3 Добавленный тип источника — прожекторы, подсвечивающие сцену сверху
-			spotlight_count = 4;
+			// 2.3 Добавленный тип источника — прожекторы, подсвечивающие сцену сверху/снизу (8 штук)
+			spotlight_count = 8;
 			float inner_angle_rad = toRadians(25.0f);
 			float outer_angle_rad = toRadians(40.0f);
 
-			spotlights[0].position = veekay::vec4{-5.0f, -10.0f, -5.0f, 0.0f};
-			veekay::vec3 spot_dir0 = veekay::vec3::normalized(veekay::vec3{0.0f, 1.0f, 0.0f});
-			spotlights[0].direction = veekay::vec4{spot_dir0.x, spot_dir0.y, spot_dir0.z, 0.0f};
-			spotlights[0].color = spotlight_base_color[0];
-			spotlights[0].cone_angles = veekay::vec4{
-				std::cos(inner_angle_rad),
-				std::cos(outer_angle_rad),
-				0.0f,
-				0.0f
+			auto set_spot = [&](int idx, veekay::vec3 pos, veekay::vec3 dir) {
+				veekay::vec3 nd = veekay::vec3::normalized(dir);
+				spotlights[idx].position = veekay::vec4{pos.x, pos.y, pos.z, 0.0f};
+				spotlights[idx].direction = veekay::vec4{nd.x, nd.y, nd.z, 0.0f};
+				spotlights[idx].color = spotlight_base_color[idx];
+				spotlights[idx].cone_angles = veekay::vec4{
+					std::cos(inner_angle_rad),
+					std::cos(outer_angle_rad),
+					0.0f,
+					0.0f
+				};
 			};
 
-			spotlights[1].position = veekay::vec4{5.0f, -10.0f, 5.0f, 0.0f};
-			veekay::vec3 spot_dir1 = veekay::vec3::normalized(veekay::vec3{0.0f, 1.0f, 0.0f});
-			spotlights[1].direction = veekay::vec4{spot_dir1.x, spot_dir1.y, spot_dir1.z, 0.0f};
-			spotlights[1].color = spotlight_base_color[1];
-			spotlights[1].cone_angles = veekay::vec4{
-				std::cos(inner_angle_rad),
-				std::cos(outer_angle_rad),
-				0.0f,
-				0.0f
-			};
-
-			spotlights[2].position = veekay::vec4{5.0f, -10.0f, -5.0f, 0.0f};
-			veekay::vec3 spot_dir2 = veekay::vec3::normalized(veekay::vec3{0.0f, 1.0f, 0.0f});
-			spotlights[2].direction = veekay::vec4{spot_dir2.x, spot_dir2.y, spot_dir2.z, 0.0f};
-			spotlights[2].color = spotlight_base_color[2];
-			spotlights[2].cone_angles = veekay::vec4{
-				std::cos(inner_angle_rad),
-				std::cos(outer_angle_rad),
-				0.0f,
-				0.0f
-			};
-
-			spotlights[3].position = veekay::vec4{-5.0f, 10.0f, 5.0f, 0.0f};
-			veekay::vec3 spot_dir3 = veekay::vec3::normalized(veekay::vec3{0.0f, 1.0f, 0.0f});
-			spotlights[3].direction = veekay::vec4{spot_dir3.x, spot_dir3.y, spot_dir3.z, 0.0f};
-			spotlights[3].color = spotlight_base_color[3];
-			spotlights[3].cone_angles = veekay::vec4{
-				std::cos(inner_angle_rad),
-				std::cos(outer_angle_rad),
-				0.0f,
-				0.0f
-			};
+			set_spot(0, {0.0f, 10.0f, 0.0f}, {0.0f, -1.0f, 0.0f});
+			set_spot(1, {8.0f, 10.0f, 0.0f}, {-1.0f, -1.0f, 0.0f});
+			set_spot(2, {-8.0f, 10.0f, 0.0f}, {1.0f, -1.0f, 0.0f});
+			set_spot(3, {0.0f, 10.0f, 8.0f}, {0.0f, -1.0f, -1.0f});
+			set_spot(4, {0.0f, -10.0f, 0.0f}, {0.0f, 1.0f, 0.0f});
+			set_spot(5, {8.0f, -10.0f, 0.0f}, {-1.0f, 1.0f, 0.0f});
+			set_spot(6, {-8.0f, -10.0f, 0.0f}, {1.0f, 1.0f, 0.0f});
+			set_spot(7, {0.0f, -10.0f, 8.0f}, {0.0f, 1.0f, -1.0f});
 			
 			first = true;
 		}
 	// Нормализуем направления прожекторов и умножаем базовый цвет на интенсивность
-	for (uint32_t i = 0; i < spotlight_count && i < 4; i++) {
+	for (uint32_t i = 0; i < spotlight_count && i < 8; i++) {
 		veekay::vec3 spot_dir = veekay::vec3::normalized(veekay::vec3{
 			spotlights[i].direction.x,
 			spotlights[i].direction.y,
@@ -1369,6 +1621,52 @@ void update(double time) {
 			sun_base_color.y * sun_intensity,
 			sun_base_color.z * sun_intensity,
 			0.0f};
+	}
+
+	// 0.7 Анимация звёзд: плавно мигают и респавнятся в новом месте после окончания жизни
+	for (auto& star : stars) {
+		star.time += dt_f;
+		if (star.time >= star.lifetime) {
+			star_spawner.respawn(star, rng);
+		}
+		float t_norm = (star.lifetime > 1e-5f) ? std::clamp(star.time / star.lifetime, 0.0f, 1.0f) : 0.0f;
+		float pulse = std::sin(t_norm * float(M_PI)); // 0..1..0 вспышка на середине жизни
+		float intensity = 0.2f + 0.8f * pulse;
+		models[star.model_index].material.albedo_color = star.base_color * intensity;
+	}
+
+	// 0.8 Кометы: движение из случайной точки в другую, хвост ориентируем по направлению полёта, голова даёт точечный свет
+	uint32_t min_point_lights = 1 + static_cast<uint32_t>(comets.size()); // слот 0 — Солнце, далее кометы
+	if (min_point_lights > 8) min_point_lights = 8;
+	point_light_count = std::max(point_light_count, min_point_lights);
+	point_light_count = std::min<uint32_t>(8, point_light_count);
+	for (size_t i = 0; i < comets.size(); ++i) {
+		CometInstance& comet = comets[i];
+		comet.t += dt_f;
+		if (comet.t >= comet.duration) {
+			comet_spawner.respawn(comet, rng);
+		}
+
+		veekay::vec3 path = comet.end - comet.start;
+		float path_len = std::sqrt(path.x * path.x + path.y * path.y + path.z * path.z);
+		float progress = (comet.duration > 1e-5f) ? std::clamp(comet.t / comet.duration, 0.0f, 1.0f) : 0.0f;
+		veekay::vec3 head_pos = comet.start + comet.dir * (progress * path_len);
+
+		if (comet.model_index < models.size()) {
+			float yaw = std::atan2(comet.dir.x, comet.dir.z) * 180.0f / float(M_PI);
+			float pitch = std::asin(-comet.dir.y) * 180.0f / float(M_PI);
+			Model& comet_model = models[comet.model_index];
+			float base_length = comet.radius + comet.tail_base_stretch;
+			float z_scale = (base_length > 1e-4f) ? (comet.tail_length / base_length) : 1.0f;
+			comet_model.transform.scale = {1.0f, 1.0f, z_scale};
+			comet_model.transform.position = head_pos;
+			comet_model.transform.rotation = {pitch, yaw, 0.0f};
+		}
+
+		if (comet.light_slot < 8) {
+			point_lights[comet.light_slot].position = veekay::vec4{head_pos.x, head_pos.y, head_pos.z, 0.0f};
+			point_lights[comet.light_slot].color = veekay::vec4{2.0f, 2.0f, 1.5f, 0.0f}; // мягкое свечение головы
+		}
 	}
 
 	// Update orbital positions
@@ -1451,7 +1749,7 @@ void update(double time) {
 		// Массив начинается с 16 байт (выравнивание std430)
 		Spotlight* lights_ptr = reinterpret_cast<Spotlight*>(
 			static_cast<char*>(spotlights_buffer->mapped_region) + 16);
-		for (uint32_t i = 0; i < spotlight_count && i < 4; i++) {
+		for (uint32_t i = 0; i < spotlight_count && i < 8; i++) {
 			lights_ptr[i] = spotlights[i];
 		}
 	}

@@ -123,7 +123,7 @@ void main() {
 	// 2.9 Прожекторы из SSBO: гладкий край через smoothstep(inner/outer)
 	// Учитываем угол между лучом и осью прожектора, делаем мягкий спад между inner/outer
 	uint spotlight_count = spotlights.count;
-	for (uint i = 0; i < spotlight_count && i < 4; i++) {
+	for (uint i = 0; i < spotlight_count && i < 8; i++) {
 		vec3 L_vec = spotlights.lights[i].position.xyz - f_position;
 		float distance = length(L_vec);
 		vec3 L = normalize(L_vec);
