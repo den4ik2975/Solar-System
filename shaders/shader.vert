@@ -22,6 +22,7 @@ layout (binding = 1, std140) uniform ModelUniforms {
 void main() {
 	vec4 position = model_data.model * vec4(v_position, 1.0f);
 
+	// 2.7 Пересчёт нормали в мировое пространство (transpose(inverse(model))) для корректного освещения
 	mat3 normal_matrix = mat3(transpose(inverse(model_data.model)));
 	vec3 normal = normal_matrix * v_normal;
 

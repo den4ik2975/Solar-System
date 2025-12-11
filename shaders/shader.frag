@@ -29,55 +29,56 @@ struct LightingData {
 };
 
 layout (binding = 0, std140) uniform SceneUniforms {
-	mat4 view_projection;
-	vec4 camera_position;
-	LightingData lighting;
+	mat4 view_projection;   // 2.5 Матрица вида*проекции из CPU (transpose внутри движка)
+	vec4 camera_position;   // 2.5 Позиция камеры в мировых координатах
+	LightingData lighting;  // 2.5 Фоновый свет и направленный источник
 } scene;
 
 layout (binding = 1, std140) uniform ModelUniforms {
-	mat4 model;
-	vec4 albedo_color;
-	vec4 specular_color;
-	vec4 material;
+	mat4 model;          // 2.5 Матрица модели (мировое преобразование)
+	vec4 albedo_color;   // 2.5 Диффузный/альбедо цвет
+	vec4 specular_color; // 2.5 Цвет блика
+	vec4 material;       // 2.5 x = shininess (экспонента блеска), <0 => эмиссия
 } model_data;
 
 layout (binding = 2, std430) readonly buffer PointLightsBuffer {
-	uint count;
+	uint count;   // 2.6 Кол-во точечных источников
 	uint _pad0;
 	uint _pad1;
 	uint _pad2;
-	PointLight lights[];
+	PointLight lights[]; // 2.6 Массив точечных источников (std430)
 } point_lights;
 
 layout (binding = 3, std430) readonly buffer SpotlightsBuffer {
-	uint count;
+	uint count;   // 2.7 Кол-во прожекторов
 	uint _pad0;
 	uint _pad1;
 	uint _pad2;
-	Spotlight lights[];
+	Spotlight lights[]; // 2.7 Массив прожекторов (std430)
 } spotlights;
 
 void main() {
 	vec3 N = normalize(f_normal);
 	vec3 V = normalize(scene.camera_position.xyz - f_position);
 	
-	// Material properties for Blinn-Phong
-	vec3 k_a = model_data.albedo_color.xyz;  // Ambient
-	vec3 k_d = model_data.albedo_color.xyz; // Diffuse
-	vec3 k_s = model_data.specular_color.xyz; // Specular
-	float shininess = model_data.material.x; // Shininess
+	// 2.8 Свойства материала для Блинн-Фонга
+	vec3 k_a = model_data.albedo_color.xyz;   // Фоновая/диффузная часть
+	vec3 k_d = model_data.albedo_color.xyz;   // Диффузная часть
+	vec3 k_s = model_data.specular_color.xyz; // Бликовая часть
+	float shininess = model_data.material.x;  // Степень блеска (экспонента)
 
-	// Unlit/emissive if shininess is negative (used for the Sun mesh)
+	// 0.6 Эмиссия: при отрицательном shininess не считаем освещение, выводим базовый цвет (Солнце)
 	if (shininess < 0.0) {
 		final_color = vec4(k_d, 1.0);
 		return;
 	}
 	
+	// 2.8 Фоновая составляющая
 	vec3 ambient = scene.lighting.ambient_color.xyz * k_a;
 	vec3 result = ambient;
 	
-	// Directional light
-	// Direction already points toward the light source
+	// 2.8 Направленный источник (остался в API): стандартный Blinn-Phong
+	// Направление уже указывает в сторону источника
 	vec3 L_dir = normalize(scene.lighting.directional_light.direction.xyz);
 	float NdotL_dir = max(dot(N, L_dir), 0.0);
 	
@@ -93,7 +94,8 @@ void main() {
 		result += diffuse + specular;
 	}
 	
-	// Point lights with inverse-square law attenuation
+	// 2.8 Точечные источники из SSBO: закон обратных квадратов + Blinn-Phong
+	// Считаем затухание 1/dist^2 и добавляем диффуз/блик для каждого источника
 	uint point_light_count = point_lights.count;
 	for (uint i = 0; i < point_light_count && i < 8; i++) {
 		vec3 L_vec = point_lights.lights[i].position.xyz - f_position;
@@ -118,7 +120,8 @@ void main() {
 		}
 	}
 	
-	// Spotlights with cone angle attenuation
+	// 2.9 Прожекторы из SSBO: гладкий край через smoothstep(inner/outer)
+	// Учитываем угол между лучом и осью прожектора, делаем мягкий спад между inner/outer
 	uint spotlight_count = spotlights.count;
 	for (uint i = 0; i < spotlight_count && i < 4; i++) {
 		vec3 L_vec = spotlights.lights[i].position.xyz - f_position;

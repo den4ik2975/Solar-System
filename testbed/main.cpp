@@ -38,7 +38,7 @@ struct Spotlight {
 	veekay::vec4 position;
 	veekay::vec4 direction;
 	veekay::vec4 color;
-	veekay::vec4 cone_angles;     //inner, outer
+	veekay::vec4 cone_angles;     // внутренний/внешний угол
 };
 
 struct LightingData {
@@ -88,38 +88,38 @@ struct GameObject {
 struct Material
 {
 	veekay::vec3 albedo_color;
-	veekay::vec3 specular_color = {0.5f, 0.5f, 0.5f};  // Specular color
-	float shininess = 32.0f;  // Specular shininess exponent
+	veekay::vec3 specular_color = {0.5f, 0.5f, 0.5f};  // Цвет блика
+	float shininess = 32.0f;  // Степень блеска (экспонента)
 };
 
 Material Standart = {
 	.albedo_color = veekay::vec3{0.6f, 0.6f, 0.6f},
-	.specular_color = {0.5f, 0.5f, 0.5f}, // Specular color
-	.shininess = 50.0f  // Specular shininess exponent
+	.specular_color = {0.5f, 0.5f, 0.5f}, // Цвет блика
+	.shininess = 50.0f  // Степень блеска
 };
 
 Material MettalicBlue = {
 	.albedo_color = veekay::vec3{0.2f, 0.2f, 0.8f},
-	.specular_color = veekay::vec3{0.2f, 0.2f, 0.8f},  // High specular for metallic
+	.specular_color = veekay::vec3{0.2f, 0.2f, 0.8f},  // Высокий блик как у металла
 	.shininess = 150.0f
 };
 
 Material MateGreen = {
 	.albedo_color = veekay::vec3{0.2f, 0.8f, 0.2f},
-	.specular_color = veekay::vec3{0.1f, 0.1f, 0.1f},  // Low specular for matte
-	.shininess = 1.0f     // Lower shininess for matte
+	.specular_color = veekay::vec3{0.1f, 0.1f, 0.1f},  // Низкий блик как у матовой поверхности
+	.shininess = 1.0f     // Небольшая степень блеска
 };
 
 Material MediumRed = {
 	.albedo_color = veekay::vec3{0.8f, 0.2f, 0.2f},
-	.specular_color = veekay::vec3{0.3f, 0.3f, 0.3f},  // Medium specular
+	.specular_color = veekay::vec3{0.3f, 0.3f, 0.3f},  // Средний блик
 	.shininess = 32.0f
 };
 
 Material YellowSun = {
 	.albedo_color = veekay::vec3{1.0f, 0.9f, 0.4f},
 	.specular_color = veekay::vec3{1.0f, 0.9f, 0.6f},
-	.shininess = -1.0f // negative signals unlit/emissive
+	.shininess = -1.0f // отрицательное значение включает эмиссию
 };
 
 Material MercuryMat = {
@@ -218,8 +218,9 @@ struct CameraState {
 };
 
 struct Orbit {
+	// 0.3 Эллиптическая орбита: хранит полуоси, поворот, угловую скорость и родителя для привязки (например, Луна к Земле)
 	size_t model_index;
-	size_t parent_index; // SIZE_MAX = no parent
+	size_t parent_index; // SIZE_MAX = нет родителя
 	float a;
 	float b;
 	float rotation_rad;
@@ -353,6 +354,7 @@ struct Cube : Model {
 };
 
 struct Sphere : Model {
+	// 0.1 Процедурная генерация сферы: вершины строятся по широте/долготе, нормали совпадают с направлением радиуса
 	Sphere(veekay::vec3 position, float radius, uint32_t stacks, uint32_t slices, Material material, std::string title = "Sphere", veekay::vec3 scale = {1.f,1.f,1.f})
 	{
 		std::vector<Vertex> vertices;
@@ -413,6 +415,7 @@ struct Sphere : Model {
 };
 
 struct Ring : Model {
+	// 0.2 Плоское кольцо (Сатурн): внутренний/внешний радиусы + корректный порядок индексов для обзора сверху
 	Ring(veekay::vec3 position, float inner_radius, float outer_radius, uint32_t segments, Material material, std::string title = "Ring")
 	{
 		std::vector<Vertex> vertices;
@@ -504,6 +507,7 @@ veekay::mat4 Transform::matrix() const {
 }
 
 veekay::mat4 Camera::view() const {
+    // 2.4 Матрица вида: инверсия трансформа камеры (T^-1 * R^-1), чтобы объекты двигались относительно наблюдателя
     veekay::mat4 rot_x = veekay::mat4::rotation(veekay::vec3{1.0f, 0.0f, 0.0f}, -toRadians(rotation.x));
     veekay::mat4 rot_y = veekay::mat4::rotation(veekay::vec3{0.0f, 1.0f, 0.0f}, -toRadians(rotation.y));
     veekay::mat4 rot_z = veekay::mat4::rotation(veekay::vec3{0.0f, 0.0f, 1.0f}, -toRadians(rotation.z));
@@ -511,7 +515,7 @@ veekay::mat4 Camera::view() const {
     veekay::mat4 rotation_matrix = rot_y * rot_x * rot_z;
     veekay::mat4 translation_matrix = veekay::mat4::translation(-position);
 
-    // Match existing row-major style: T^-1 then R^-1
+    // Соответствуем порядку умножения veekay: сначала T^-1, затем R^-1
     return translation_matrix * rotation_matrix;
 }
 
@@ -552,6 +556,7 @@ veekay::mat4 Camera::lookAt_view() const{
 }
 
 veekay::mat4 Camera::view_projection(float aspect_ratio) const {
+	// 2.4 Композиция вида/проекции: соответствуем API veekay (вид слева, проекция справа)
 	auto projection = veekay::mat4::projection(fov, aspect_ratio, near_plane, far_plane);
 
 	if(LookAt == true)
@@ -982,8 +987,9 @@ void initialize(VkCommandBuffer cmd) {
 		                       write_infos, 0, nullptr);
 	}
 
-	// Scene setup: solar system
-	// Plane({0.0f, 0.0f, 0.0f}, Standart, "Ecliptic");
+		// 0.4 Сцена солнечной системы: планеты/кольцо, с масштабированием расстояний под окно
+		//    Используем эксцентриситет/период/угол из planets.md, полуось b = a*sqrt(1-e^2)
+		// Plane({0.0f, 0.0f, 0.0f}, Standart, "Ecliptic");
 
 	const auto add_orbit = [&](size_t model_index, size_t parent_index, float a, float e, float rotation_deg, float period_years, float phase = 0.0f) {
 		float b = a * std::sqrt(1.0f - e * e);
@@ -1005,15 +1011,15 @@ void initialize(VkCommandBuffer cmd) {
 		return models.size() - 1;
 	};
 
-	// Scale distances to fit the scene
-	const float base_distance = 1.5f;
+		// Масштабируем расстояния под сцену
+		const float base_distance = 1.5f;
 
-	// Sun
-	size_t sun_idx = add_planet({0.0f, 0.0f, 0.0f}, 1.5f, YellowSun, "Sun");
+		// Солнце
+		size_t sun_idx = add_planet({0.0f, 0.0f, 0.0f}, 1.5f, YellowSun, "Sun");
 
-	// Planets
-	size_t mercury_idx = add_planet({base_distance * 2.0f, 0.0f, 0.0f}, 0.25f, MercuryMat, "Mercury");
-	add_orbit(mercury_idx, SIZE_MAX, base_distance * 2.0f, 0.206f, 29.0f, 0.24f);
+		// Планеты
+		size_t mercury_idx = add_planet({base_distance * 2.0f, 0.0f, 0.0f}, 0.25f, MercuryMat, "Mercury");
+		add_orbit(mercury_idx, SIZE_MAX, base_distance * 2.0f, 0.206f, 29.0f, 0.24f);
 
 	size_t venus_idx = add_planet({base_distance * 3.0f, 0.0f, 0.0f}, 0.35f, VenusMat, "Venus");
 	add_orbit(venus_idx, SIZE_MAX, base_distance * 3.0f, 0.007f, 77.0f, 0.62f);
@@ -1033,10 +1039,10 @@ void initialize(VkCommandBuffer cmd) {
 	size_t saturn_idx = add_planet({base_distance * 9.0f, 0.0f, 0.0f}, 0.8f, SaturnMat, "Saturn");
 	add_orbit(saturn_idx, SIZE_MAX, base_distance * 9.0f, 0.054f, 113.0f, 29.46f);
 
-	// Saturn ring
-			Ring({0.0f, 0.0f, 0.0f}, 1.0f, 1.6f, 64, RingMat, "Saturn Ring");
-	size_t ring_idx = models.size() - 1;
-	add_orbit(ring_idx, saturn_idx, 0.0f, 0.0f, 0.0f, 1.0f); // stick to Saturn
+		// Кольцо Сатурна
+		Ring({0.0f, 0.0f, 0.0f}, 1.0f, 1.6f, 64, RingMat, "Saturn Ring");
+		size_t ring_idx = models.size() - 1;
+		add_orbit(ring_idx, saturn_idx, 0.0f, 0.0f, 0.0f, 1.0f); // прицеплено к Сатурну
 
 	size_t uranus_idx = add_planet({base_distance * 11.0f, 0.0f, 0.0f}, 0.7f, UranusMat, "Uranus");
 	add_orbit(uranus_idx, SIZE_MAX, base_distance * 11.0f, 0.047f, 74.0f, 84.01f);
@@ -1086,13 +1092,13 @@ namespace {
 		{0.7f, 0.8f, 0.9f, 0.0f},
 		{0.8f, 0.7f, 0.8f, 0.0f},
 	};
-	float spotlight_intensity[4] = {20.0f, 20.0f, 20.0f, 20.0f};
+	float spotlight_intensity[4] = {80.0f, 80.0f, 80.0f, 80.0f};
 }
 void update(double time) {
     static int selectedModelIndex = 0;
 	static bool first = false;
 
-	// Ensure UI edits the unscaled sun base color
+	// Готовим цвет Солнца без множителя, чтобы в UI редактировать базовое значение
 	if (point_light_count > 0) {
 		point_lights[0].color = sun_base_color;
 		point_lights[0].color.w = 0.0f;
@@ -1108,6 +1114,7 @@ void update(double time) {
 	ImGui::InputFloat3("Look-at target", reinterpret_cast<float *>(&camera.target_position));
 
 	bool previousLookAt = camera.LookAt;
+	// 2.1 Переключение режимов камеры: сохраняем/восстанавливаем положение и цель при переходе LookAt <-> свободная камера
 	ImGui::Checkbox("Look-at mode", &camera.LookAt);
 	if (previousLookAt != camera.LookAt) {
 		if (previousLookAt) {
@@ -1160,17 +1167,18 @@ void update(double time) {
 	}
 
 	ImGui::SliderFloat("Orbit speedup", &orbit_speedup, 0.1f, 50.0f, "%.1f");
+	// 0.5 Регулировка яркости Солнца без изменения подобранного цвета
 	ImGui::SliderFloat("Sun intensity", &sun_intensity, 0.1f, 20.0f, "%.1f");
 
 	ImGui::Separator();
 	
-	// Ambient light
+	// Фоновый (ambient) свет
 	ImGui::Text("Ambient Light");
 	ImGui::ColorEdit3("Ambient Color", &lighting_params.ambient_color.x);
 	
 	ImGui::Separator();
 	
-	// Point lights
+	// Точечные источники
 	ImGui::Text("Point Lights");
 	int point_count_int = int(point_light_count);
 	if (ImGui::DragInt("Point Light Count", &point_count_int, 1.0f, 0, 8)) {
@@ -1191,7 +1199,7 @@ void update(double time) {
 		sun_base_color.w = 0.0f;
 	}
 
-	// Spotlights
+	// Прожекторы
 	ImGui::Text("Spotlights");
 	int spot_count_int = int(spotlight_count);
 	if (ImGui::DragInt("Spotlight Count", &spot_count_int, 1.0f, 0, 4)) {
@@ -1221,7 +1229,8 @@ void update(double time) {
 		ImGui::DragFloat3("Position", &spotlights[i].position.x, 0.1f);
 		ImGui::DragFloat3("Direction", &spotlights[i].direction.x, 0.01f, -1.0f, 1.0f);
 		ImGui::ColorEdit3("Color", &spotlights[i].color.x);
-		ImGui::SliderFloat("Intensity", &spotlight_intensity[i], 0.0f, 20.0f);
+		// 0.5 Регулировка яркости прожектора отдельным множителем
+		ImGui::SliderFloat("Intensity", &spotlight_intensity[i], 0.0f, 100.0f);
 		float inner_deg = std::acos(spotlights[i].cone_angles.x) * 180.0f / float(M_PI);
 		float outer_deg = std::acos(spotlights[i].cone_angles.y) * 180.0f / float(M_PI);
 		if (ImGui::DragFloat("Inner Angle (deg)", &inner_deg, 1.0f, 0.0f, 90.0f)) {
@@ -1233,15 +1242,16 @@ void update(double time) {
 		ImGui::PopID();
 	}
 	ImGui::End();
-
+	
+	// 2.2 Управление камерой с клавиатуры/мыши вне UI окна
 	for (uint32_t i = 0; i < spotlight_count && i < 4; ++i) {
 		spotlight_base_color[i] = spotlights[i].color;
 		spotlight_base_color[i].w = 0.0f;
 	}
-
+	
 	if (!ImGui::IsWindowHovered()) {
 		using namespace veekay::input;
-
+	
 		if (mouse::isButtonDown(mouse::Button::left)) {
 			auto view = (camera.LookAt) ? camera.lookAt_view() : camera.view();
 			veekay::vec3 right = {view[0][0], view[1][0], view[2][0]};
@@ -1280,12 +1290,12 @@ void update(double time) {
 		if (!first) {
 			lighting_params.ambient_color = veekay::vec4{0.1f, 0.1f, 0.1f, 0.0f};
 			
-			// Point light
+			// Точечный источник (Солнце)
 			point_light_count = 1;
 			point_lights[0].position = veekay::vec4{0.0f, 0.0f, 0.0f, 0.0f};
-			point_lights[0].color = sun_base_color; // UI-driven color
+			point_lights[0].color = sun_base_color; // Цвет задаётся из UI
 			
-			// Spotlights from above for fill
+			// 2.3 Добавленный тип источника — прожекторы, подсвечивающие сцену сверху
 			spotlight_count = 4;
 			float inner_angle_rad = toRadians(25.0f);
 			float outer_angle_rad = toRadians(40.0f);
@@ -1336,7 +1346,7 @@ void update(double time) {
 			
 			first = true;
 		}
-	// Normalize spotlight directions and apply intensity to base color
+	// Нормализуем направления прожекторов и умножаем базовый цвет на интенсивность
 	for (uint32_t i = 0; i < spotlight_count && i < 4; i++) {
 		veekay::vec3 spot_dir = veekay::vec3::normalized(veekay::vec3{
 			spotlights[i].direction.x,
@@ -1353,6 +1363,7 @@ void update(double time) {
 
 	// Apply sun intensity to the first point light color but keep user-editable base
 	if (point_light_count > 0) {
+		// 0.5 Яркость Солнца: умножаем пользовательский цвет на слайдер интенсивности
 		point_lights[0].color = veekay::vec4{
 			sun_base_color.x * sun_intensity,
 			sun_base_color.y * sun_intensity,
@@ -1361,6 +1372,8 @@ void update(double time) {
 	}
 
 	// Update orbital positions
+	// 0.3 Расчет эллиптических орбит (поворот, эксцентриситет) и привязка к родителю
+	//     omega=2*pi/period, sim_years ускоряем коэффициентом orbit_speedup из UI
 	double sim_years = time * (orbit_speedup * 0.1);
 	for (const auto& orbit : orbits) {
 		if (orbit.model_index >= models.size()) continue;
@@ -1390,6 +1403,7 @@ void update(double time) {
 		.lighting = lighting_params,
 	};
 
+	// 2.5 Заполнение UBO с матрицей вида/проекции и позицией камеры для шейдеров
 	std::vector<ModelUniforms> model_uniforms(models.size());
 	for (size_t i = 0, n = models.size(); i < n; ++i) {
 		const Model& model = models[i];
@@ -1413,13 +1427,13 @@ void update(double time) {
 		*reinterpret_cast<ModelUniforms*>(pointer) = uniforms;
 	}
 
-	// Write point lights to SSBO
+	// 2.6 Точечные источники в SSBO (std430): счётчик + массив для фрагментного шейдера
 	{
-		// Write count at offset 0, then pad to 16-byte boundary
+		// Записываем количество по смещению 0, затем 16-байтное выравнивание
 		uint32_t* count_ptr = static_cast<uint32_t*>(point_lights_buffer->mapped_region);
 		*count_ptr = point_light_count;
 		
-		// Array starts at 16-byte boundary (std430 alignment)
+		// Массив начинается с 16 байт (выравнивание std430)
 		PointLight* lights_ptr = reinterpret_cast<PointLight*>(
 			static_cast<char*>(point_lights_buffer->mapped_region) + 16);
 		for (uint32_t i = 0; i < point_light_count && i < 8; i++) {
@@ -1428,12 +1442,13 @@ void update(double time) {
 	}
 	
 	// Write spotlights to SSBO
+	// 2.7 Передача прожекторов в SSBO (std430) для расчёта Блинн-Фонга в шейдере
 	{
-		// Write count at offset 0, then pad to 16-byte boundary
+		// Записываем количество по смещению 0, затем 16-байтное выравнивание
 		uint32_t* count_ptr = static_cast<uint32_t*>(spotlights_buffer->mapped_region);
 		*count_ptr = spotlight_count;
 		
-		// Array starts at 16-byte boundary (std430 alignment)
+		// Массив начинается с 16 байт (выравнивание std430)
 		Spotlight* lights_ptr = reinterpret_cast<Spotlight*>(
 			static_cast<char*>(spotlights_buffer->mapped_region) + 16);
 		for (uint32_t i = 0; i < spotlight_count && i < 4; i++) {
