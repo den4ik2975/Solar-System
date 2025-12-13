@@ -36,6 +36,7 @@ layout (binding = 0, std140) uniform SceneUniforms {
 	mat4 view_projection;   // 2.5 Матрица вида*проекции из CPU (transpose внутри движка)
 	vec4 camera_position;   // 2.5 Позиция камеры в мировых координатах
 	LightingData lighting;  // 2.5 Фоновый свет и направленный источник
+	vec4 time;              // x = time
 } scene;
 
 layout (binding = 1, std140) uniform ModelUniforms {
@@ -67,10 +68,30 @@ void main() {
 	
 	// 2.8 Свойства материала для Блинн-Фонга
 	float warp = max(model_data.material.y, 0.0);
-	vec2 uv = f_uv + warp * vec2(sin(f_uv.y * 10.0), cos(f_uv.x * 10.0)) * 0.05;
+	vec2 uv = f_uv;
+	if (warp > 0.0) {
+		float t = scene.time.x;
+		uv += vec2(t * 0.02, t * 0.01); // gentle drift
+		vec2 centered = uv - vec2(0.5);
+		float r = length(centered);
+		float core = 1.0 - smoothstep(0.2, 0.9, r);
+		// core swirl + shallow radial wave
+		float twist = core * warp * 0.07 * sin(t * 1.4 + r * 12.0);
+		float c = cos(twist);
+		float s = sin(twist);
+		centered = vec2(c * centered.x - s * centered.y, s * centered.x + c * centered.y);
+		centered *= (1.0 + core * warp * 0.02 * sin(r * 15.0 - t * 1.5));
+		uv = vec2(0.5) + centered;
+	}
 	vec4 albedo_sample = texture(tex_albedo, uv);
 	vec4 spec_sample = texture(tex_specular, uv);
 	vec4 emissive_sample = texture(tex_emissive, uv);
+
+	float r_center = length(f_uv - vec2(0.5));
+	float emissive_pulse = max(model_data.material.z, 0.0);
+	float pulse = 1.0 + emissive_pulse * 0.15 * sin(scene.time.x * 2.0 - r_center * 15.0);
+	albedo_sample.rgb *= pulse;
+	emissive_sample.rgb *= pulse;
 
 	vec3 k_a = model_data.albedo_color.xyz * albedo_sample.rgb;   // Фоновая/диффузная часть
 	vec3 k_d = model_data.albedo_color.xyz * albedo_sample.rgb;   // Диффузная часть
@@ -80,7 +101,7 @@ void main() {
 
 	// 0.6 Эмиссия: при отрицательном shininess не считаем освещение, выводим базовый цвет (Солнце)
 	if (shininess < 0.0) {
-		final_color = vec4(k_d + emissive_sample.rgb, alpha);
+		final_color = vec4((k_d + emissive_sample.rgb), alpha);
 		return;
 	}
 	

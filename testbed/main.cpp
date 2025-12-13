@@ -53,6 +53,7 @@ struct SceneUniforms {
 	veekay::mat4 view_projection;
 	veekay::vec4 camera_position; 
 	LightingData lighting;
+	veekay::vec4 time;
 };
 
 struct ModelUniforms {
@@ -95,6 +96,7 @@ struct Material
 	float shininess = 32.0f;  // Степень блеска (экспонента)
 	float opacity = 1.0f;     // Альфа для смешивания (1 — непрозрачный)
 	float warp_strength = 0.0f; // Для искажения UV (для базы)
+	float emissive_pulse = 0.0f; // Доп. пульсация эмиссии/текстуры
 };
 
 Material Standart = {
@@ -219,8 +221,8 @@ Material BaseMat = {
 };
 
 Material SpotlightMat = {
-	.albedo_color = veekay::vec3{0.5f, 0.5f, 0.5f},
-	.specular_color = veekay::vec3{0.2f, 0.2f, 0.2f},
+	.albedo_color = veekay::vec3{0.25f, 0.25f, 0.25f},
+	.specular_color = veekay::vec3{0.15f, 0.15f, 0.15f},
 	.shininess = 32.0f
 };
 
@@ -1055,7 +1057,7 @@ namespace {
 	Spotlight spotlights[8];
 	float orbit_speedup = 2.0f;
 	veekay::vec4 sun_base_color = {2.5f, 2.3f, 1.6f, 0.0f};
-	float sun_intensity = 1.0f;
+	float sun_intensity = 13.0f;
 	veekay::vec4 spotlight_base_color[8] = {
 		{0.8f, 0.8f, 0.9f, 0.0f},
 		{0.7f, 0.7f, 0.8f, 0.0f},
@@ -1621,7 +1623,6 @@ void initialize(VkCommandBuffer cmd) {
 		// Солнце
 	size_t sun_idx = add_planet({0.0f, 0.0f, 0.0f}, 1.5f, YellowSun, "Sun");
 	sun_model_index = sun_idx;
-	spin_targets.push_back({sun_idx, 10.0f});
 
 		// Планеты
 	size_t mercury_idx = add_planet({base_distance * 2.0f, 0.0f, 0.0f}, 0.25f, MercuryMat, "Mercury");
@@ -1691,6 +1692,9 @@ void initialize(VkCommandBuffer cmd) {
 			c.radius = comet_radius;
 			c.tail_base_stretch = comet_base_stretch;
 			c.light_slot = static_cast<uint32_t>(1 + i); // слоты 1..2 под кометы (0 — Солнце)
+			models[c.model_index].material.warp_strength = 1.0f;
+			models[c.model_index].material.emissive_pulse = 0.5f;
+			models[c.model_index].texture_set = white_texture_set;
 			comet_spawner.respawn(c, rng);
 			comets.push_back(c);
 		}
@@ -1701,8 +1705,10 @@ void initialize(VkCommandBuffer cmd) {
 			Cylinder({0.0f, 0.0f, 0.0f}, base_radius, base_height, 48, BaseMat, "GlobeBase");
 			base_model_index = idx_before;
 			if (base_model_index < models.size()) {
-				models[base_model_index].transform.position.y = (globe_radius + base_height * 0.47f);
-				models[base_model_index].transform.rotation = {90.0f, 0.0f, 0.0f};
+				models[base_model_index].transform.position.y = (globe_radius + base_height * 0.4f);
+				models[base_model_index].transform.rotation = {-90.0f, 0.0f, 0.0f};
+				models[base_model_index].transform.scale.z = -1.0f; // инверсия, чтобы виднелась наружная сторона при таком повороте
+				models[base_model_index].material.emissive_pulse = 0.8f; // радиальная пульсация текстуры
 			}
 		}
 
@@ -1719,6 +1725,9 @@ void initialize(VkCommandBuffer cmd) {
 			spotlight_model_indices[i] = idx_before;
 			if (spotlight_model_indices[i] < models.size()) {
 				models[spotlight_model_indices[i]].transform.scale = {1.0f, 1.0f, 1.0f};
+				models[spotlight_model_indices[i]].texture_set = white_texture_set;
+				models[spotlight_model_indices[i]].material.warp_strength = 0.0f;
+				models[spotlight_model_indices[i]].material.emissive_pulse = 0.0f;
 			}
 		}
 
@@ -1729,7 +1738,8 @@ void initialize(VkCommandBuffer cmd) {
 			models[idx].material.warp_strength = warp;
 		};
 
-		set_tex(sun_idx, "textures/2k_sun.jpg");
+		set_tex(sun_idx, "textures/2k_sun.jpg", std::string(), std::string(), 1.2f);
+		models[sun_idx].material.emissive_pulse = 1.0f;
 		set_tex(mercury_idx, "textures/2k_mercury.jpg");
 		set_tex(venus_idx, "textures/2k_venus_surface.jpg");
 		set_tex(earth_idx, "textures/2k_earth_daymap.jpg", "textures/2k_earth_specular_map.png", "textures/2k_earth_clouds.jpg");
@@ -1991,7 +2001,7 @@ void update(double time) {
 
 	// создаем источники первый раз
 	if (!first) {
-		lighting_params.ambient_color = veekay::vec4{0.1f, 0.1f, 0.1f, 0.0f};
+		lighting_params.ambient_color = veekay::vec4{0.5f, 0.5f, 0.5f, 0.0f};
 		
 		// Точечный источник (Солнце)
 			point_light_count = 1;
@@ -2158,6 +2168,7 @@ void update(double time) {
 		.view_projection = camera.view_projection(aspect_ratio),
 		.camera_position = veekay::vec4{camera.position.x, camera.position.y, camera.position.z, 0.0f},
 		.lighting = lighting_params,
+		.time = veekay::vec4{static_cast<float>(time), 0.0f, 0.0f, 0.0f},
 	};
 
 	// 2.5 Заполнение UBO с матрицей вида/проекции и позицией камеры для шейдеров
@@ -2169,7 +2180,7 @@ void update(double time) {
 		uniforms.model = model.transform.matrix();
 		uniforms.albedo_color = veekay::vec4{model.material.albedo_color.x, model.material.albedo_color.y, model.material.albedo_color.z, 0.0f};
 		uniforms.specular_color = veekay::vec4{model.material.specular_color.x, model.material.specular_color.y, model.material.specular_color.z, 0.0f};
-		uniforms.material = veekay::vec4{model.material.shininess, model.material.warp_strength, 0.0f, model.material.opacity};
+		uniforms.material = veekay::vec4{model.material.shininess, model.material.warp_strength, model.material.emissive_pulse, model.material.opacity};
 	}
 
 	*(SceneUniforms*)scene_uniforms_buffer->mapped_region = scene_uniforms;
