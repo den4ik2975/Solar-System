@@ -6,6 +6,10 @@ layout (location = 2) in vec2 f_uv;
 
 layout (location = 0) out vec4 final_color;
 
+layout (set = 1, binding = 0) uniform sampler2D tex_albedo;
+layout (set = 1, binding = 1) uniform sampler2D tex_specular;
+layout (set = 1, binding = 2) uniform sampler2D tex_emissive;
+
 struct DirectionalLight {
 	vec4 direction;
 	vec4 color;
@@ -38,7 +42,7 @@ layout (binding = 1, std140) uniform ModelUniforms {
 	mat4 model;          // 2.5 Матрица модели (мировое преобразование)
 	vec4 albedo_color;   // 2.5 Диффузный/альбедо цвет
 	vec4 specular_color; // 2.5 Цвет блика
-	vec4 material;       // 2.5 x = shininess (экспонента блеска), <0 => эмиссия
+	vec4 material;       // 2.5 x = shininess (экспонента блеска), <0 => эмиссия, y = warp, w = opacity
 } model_data;
 
 layout (binding = 2, std430) readonly buffer PointLightsBuffer {
@@ -62,15 +66,21 @@ void main() {
 	vec3 V = normalize(scene.camera_position.xyz - f_position);
 	
 	// 2.8 Свойства материала для Блинн-Фонга
-	vec3 k_a = model_data.albedo_color.xyz;   // Фоновая/диффузная часть
-	vec3 k_d = model_data.albedo_color.xyz;   // Диффузная часть
-	vec3 k_s = model_data.specular_color.xyz; // Бликовая часть
+	float warp = max(model_data.material.y, 0.0);
+	vec2 uv = f_uv + warp * vec2(sin(f_uv.y * 10.0), cos(f_uv.x * 10.0)) * 0.05;
+	vec4 albedo_sample = texture(tex_albedo, uv);
+	vec4 spec_sample = texture(tex_specular, uv);
+	vec4 emissive_sample = texture(tex_emissive, uv);
+
+	vec3 k_a = model_data.albedo_color.xyz * albedo_sample.rgb;   // Фоновая/диффузная часть
+	vec3 k_d = model_data.albedo_color.xyz * albedo_sample.rgb;   // Диффузная часть
+	vec3 k_s = model_data.specular_color.xyz * spec_sample.rgb; // Бликовая часть
 	float shininess = model_data.material.x;  // Степень блеска (экспонента)
-	float alpha = (model_data.material.w > 0.0) ? model_data.material.w : 1.0;
+	float alpha = clamp(model_data.material.w * albedo_sample.a, 0.0, 1.0);
 
 	// 0.6 Эмиссия: при отрицательном shininess не считаем освещение, выводим базовый цвет (Солнце)
 	if (shininess < 0.0) {
-		final_color = vec4(k_d, alpha);
+		final_color = vec4(k_d + emissive_sample.rgb, alpha);
 		return;
 	}
 	
@@ -157,5 +167,6 @@ void main() {
 		}
 	}
 	
+	result += emissive_sample.rgb;
 	final_color = vec4(result, alpha);
 }

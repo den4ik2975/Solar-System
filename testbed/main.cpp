@@ -8,12 +8,16 @@
 #include <cmath>
 #include <random>
 #include <chrono>
+#include <unordered_map>
+#include <unordered_set>
 
 #include <veekay/veekay.hpp>
 
 #include <vulkan/vulkan_core.h>
 #include <imgui.h>
 #include <lodepng.h>
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
 
 namespace {
 
@@ -93,6 +97,7 @@ struct Material
 	veekay::vec3 specular_color = {0.5f, 0.5f, 0.5f};  // Цвет блика
 	float shininess = 32.0f;  // Степень блеска (экспонента)
 	float opacity = 1.0f;     // Альфа для смешивания (1 — непрозрачный)
+	float warp_strength = 0.0f; // Для искажения UV (для базы)
 };
 
 Material Standart = {
@@ -162,13 +167,13 @@ Material SaturnMat = {
 };
 
 Material UranusMat = {
-	.albedo_color = veekay::vec3{0.6f, 0.8f, 0.9f},
+	.albedo_color = veekay::vec3{1.0f, 1.0f, 1.0f},
 	.specular_color = veekay::vec3{0.3f, 0.4f, 0.4f},
 	.shininess = 96.0f
 };
 
 Material NeptuneMat = {
-	.albedo_color = veekay::vec3{0.3f, 0.4f, 0.9f},
+	.albedo_color = veekay::vec3{1.0f, 1.0f, 1.0f},
 	.specular_color = veekay::vec3{0.2f, 0.3f, 0.6f},
 	.shininess = 96.0f
 };
@@ -204,10 +209,10 @@ Material CometTailMat = {
 };
 
 Material GlassMat = {
-	.albedo_color = veekay::vec3{0.05f, 0.08f, 0.12f},
+	.albedo_color = veekay::vec3{0.8f, 0.85f, 0.9f},
 	.specular_color = veekay::vec3{0.9f, 0.9f, 1.0f},
 	.shininess = 256.0f, // «стеклянный» блеск (пока без прозрачности)
-	.opacity = 0.2f
+	.opacity = 0.25f
 };
 
 Material BaseMat = {
@@ -222,10 +227,18 @@ Material SpotlightMat = {
 	.shininess = 32.0f
 };
 
+struct TextureSet {
+	veekay::graphics::Texture* albedo = nullptr;
+	veekay::graphics::Texture* specular = nullptr;
+	veekay::graphics::Texture* emissive = nullptr;
+	VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+};
+
 struct Model : GameObject {
 	Mesh mesh;
 	std::string title;
 	Material material;
+	size_t texture_set = SIZE_MAX;
 };
 
 struct Camera {
@@ -319,12 +332,20 @@ constexpr float base_height = 2.0f;
 constexpr float base_radius = 12.0f;
 constexpr float projector_radius = 0.2f;
 constexpr float projector_length = 1.0f;
+const std::string asset_root = "D:/Denis/Documents/Lab2/Lab2/";
 size_t glass_model_index = SIZE_MAX;
 size_t base_model_index = SIZE_MAX;
+size_t sun_model_index = SIZE_MAX;
+size_t saturn_ring_model_index = SIZE_MAX;
 size_t spotlight_model_indices[8] = {
 	SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX,
 	SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX
 };
+std::vector<TextureSet> texture_sets;
+size_t default_texture_set = SIZE_MAX;
+size_t white_texture_set = SIZE_MAX;
+std::unordered_map<std::string, veekay::graphics::Texture*> texture_cache;
+std::vector<std::pair<size_t, float>> spin_targets; // model index, deg/sec
 }
 
 struct Plane : Model {
@@ -356,6 +377,7 @@ struct Plane : Model {
 		m.mesh = mesh;
 		m.material = material,
 		m.title = title;
+		m.texture_set = default_texture_set;
 
 		models.push_back(m);
 	}
@@ -421,6 +443,7 @@ struct Cube : Model {
 		m.mesh = mesh;
 		m.material = material,
 		m.title = title;
+		m.texture_set = default_texture_set;
 
 		models.push_back(m);
 	}
@@ -482,6 +505,7 @@ struct Sphere : Model {
 		m.mesh = mesh;
 		m.material = material,
 		m.title = title;
+		m.texture_set = default_texture_set;
 
 		models.push_back(m);
 	}
@@ -590,6 +614,7 @@ struct StretchedSphere : Model {
 		transform.position = position;
 		this->material = material;
 		this->title = title;
+		this->texture_set = default_texture_set;
 		models.push_back(*this);
 	}
 };
@@ -680,6 +705,7 @@ struct Cylinder : Model {
 		transform.position = position;
 		this->material = material;
 		this->title = title;
+		this->texture_set = default_texture_set;
 		models.push_back(*this);
 	}
 };
@@ -699,8 +725,8 @@ struct Ring : Model {
 
 			veekay::vec3 normal = {0.0f, 1.0f, 0.0f};
 
-			vertices.push_back({{inner_radius * c, 0.0f, inner_radius * s}, normal, {u, 0.0f}});
-			vertices.push_back({{outer_radius * c, 0.0f, outer_radius * s}, normal, {u, 1.0f}});
+			vertices.push_back({{inner_radius * c, 0.0f, inner_radius * s}, normal, {0.0f, u}});
+			vertices.push_back({{outer_radius * c, 0.0f, outer_radius * s}, normal, {1.0f, u}});
 		}
 
 		for (uint32_t i = 0; i < segments; ++i) {
@@ -729,6 +755,7 @@ struct Ring : Model {
 		m.mesh = mesh;
 		m.material = material,
 		m.title = title;
+		m.texture_set = default_texture_set;
 
 		models.push_back(m);
 	}
@@ -803,6 +830,7 @@ inline namespace {
 	VkDescriptorPool descriptor_pool;
 	VkDescriptorSetLayout descriptor_set_layout;
 	VkDescriptorSet descriptor_set;
+	VkDescriptorSetLayout texture_descriptor_set_layout;
 
 	VkPipelineLayout pipeline_layout;
 	VkPipeline pipeline;
@@ -816,7 +844,8 @@ inline namespace {
 	veekay::graphics::Texture* missing_texture;
 	VkSampler missing_texture_sampler;
 
-	veekay::graphics::Texture* texture;
+	veekay::graphics::Texture* white_texture;
+	veekay::graphics::Texture* black_texture;
 	VkSampler texture_sampler;
 }
 
@@ -827,6 +856,110 @@ float toRadians(float degrees) {
 float randf(std::mt19937& rng, float a, float b) {
 	std::uniform_real_distribution<float> dist(a, b);
 	return dist(rng);
+}
+
+veekay::graphics::Texture* load_texture_rgba(VkCommandBuffer cmd, const std::string& path, veekay::graphics::Texture* fallback) {
+	int w = 0, h = 0, comp = 0;
+	stbi_uc* pixels = stbi_load(path.c_str(), &w, &h, &comp, STBI_rgb_alpha);
+	if (!pixels || w <= 0 || h <= 0) {
+		std::cerr << "Failed to load texture: " << path << "\n";
+		if (pixels) stbi_image_free(pixels);
+		return fallback;
+	}
+
+	std::vector<uint8_t> data(static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
+	std::memcpy(data.data(), pixels, data.size());
+	stbi_image_free(pixels);
+
+	try {
+		return new veekay::graphics::Texture(cmd, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+		                                     VK_FORMAT_R8G8B8A8_UNORM, data.data());
+	} catch (const std::exception& e) {
+		std::cerr << "Failed to create texture for " << path << ": " << e.what() << "\n";
+		return fallback;
+	}
+}
+
+veekay::graphics::Texture* make_solid_texture(VkCommandBuffer cmd, uint32_t rgba) {
+	return new veekay::graphics::Texture(cmd, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, &rgba);
+}
+
+veekay::graphics::Texture* cached_texture(VkCommandBuffer cmd, const std::string& path, veekay::graphics::Texture* fallback) {
+	auto resolve = [&](const std::string& p) -> std::string {
+		// If path already absolute (Windows drive or starts with /), keep it, else prepend asset_root
+		if (p.size() > 2 && ((p[1] == ':' && (p[2] == '\\' || p[2] == '/')) || p[0] == '/' || p[0] == '\\')) {
+			return p;
+		}
+		return asset_root + p;
+	};
+	std::string full = resolve(path);
+	auto it = texture_cache.find(full);
+	if (it != texture_cache.end()) {
+		return it->second ? it->second : fallback;
+	}
+	auto tex = load_texture_rgba(cmd, full, fallback);
+	texture_cache[full] = tex;
+	return tex ? tex : fallback;
+}
+
+size_t create_texture_set(VkDevice device, veekay::graphics::Texture* albedo, veekay::graphics::Texture* specular, veekay::graphics::Texture* emissive) {
+	TextureSet set;
+	set.albedo = albedo ? albedo : missing_texture;
+	set.specular = specular ? specular : white_texture;
+	set.emissive = emissive ? emissive : black_texture;
+
+	VkDescriptorSetAllocateInfo alloc_info{
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+		.descriptorPool = descriptor_pool,
+		.descriptorSetCount = 1,
+		.pSetLayouts = &texture_descriptor_set_layout,
+	};
+
+	if (vkAllocateDescriptorSets(device, &alloc_info, &set.descriptor_set) != VK_SUCCESS) {
+		std::cerr << "Failed to allocate texture descriptor set\n";
+		return default_texture_set;
+	} else {
+		VkDescriptorImageInfo infos[3];
+		infos[0] = {
+			.sampler = texture_sampler,
+			.imageView = set.albedo->view,
+			.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+		};
+		infos[1] = {
+			.sampler = texture_sampler,
+			.imageView = set.specular->view,
+			.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+		};
+		infos[2] = {
+			.sampler = texture_sampler,
+			.imageView = set.emissive->view,
+			.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+		};
+
+		VkWriteDescriptorSet writes[3];
+		for (int i = 0; i < 3; ++i) {
+			writes[i] = {
+				.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+				.dstSet = set.descriptor_set,
+				.dstBinding = static_cast<uint32_t>(i),
+				.dstArrayElement = 0,
+				.descriptorCount = 1,
+				.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+				.pImageInfo = &infos[i]
+			};
+		}
+		vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);
+	}
+
+	texture_sets.push_back(set);
+	return texture_sets.size() - 1;
+}
+
+size_t create_texture_set_from_paths(VkCommandBuffer cmd, const std::string& albedo_path, const std::string& spec_path = std::string(), const std::string& emissive_path = std::string()) {
+	veekay::graphics::Texture* albedo = albedo_path.empty() ? missing_texture : cached_texture(cmd, albedo_path, missing_texture);
+	veekay::graphics::Texture* spec = spec_path.empty() ? white_texture : cached_texture(cmd, spec_path, white_texture);
+	veekay::graphics::Texture* emissive = emissive_path.empty() ? black_texture : cached_texture(cmd, emissive_path, black_texture);
+	return create_texture_set(veekay::app.vk_device, albedo, spec, emissive);
 }
 
 veekay::vec3 random_unit_vec(std::mt19937& rng) {
@@ -1146,28 +1279,29 @@ void initialize(VkCommandBuffer cmd) {
 		blend_info_glass.pAttachments = &attachment_info_glass;
 
 		{
+			const uint32_t max_texture_sets = max_models;
 			VkDescriptorPoolSize pools[] = {
 				{
 					.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-					.descriptorCount = 8,
+					.descriptorCount = 16,
 				},
 				{
 					.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-					.descriptorCount = 8,
+					.descriptorCount = 16,
 				},
 				{
 					.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-					.descriptorCount = 8,
+					.descriptorCount = 16,
 				},
 				{
 					.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-					.descriptorCount = 8,
+					.descriptorCount = 3u * max_texture_sets
 				}
 			};
 			
 			VkDescriptorPoolCreateInfo info{
 				.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-				.maxSets = 1,
+				.maxSets = 1 + max_texture_sets,
 				.poolSizeCount = sizeof(pools) / sizeof(pools[0]),
 				.pPoolSizes = pools,
 			};
@@ -1223,6 +1357,43 @@ void initialize(VkCommandBuffer cmd) {
 			}
 		}
 
+		// Layout for textures (albedo, specular, emissive)
+		{
+			VkDescriptorSetLayoutBinding bindings[] = {
+				{
+					.binding = 0,
+					.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+					.descriptorCount = 1,
+					.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+				},
+				{
+					.binding = 1,
+					.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+					.descriptorCount = 1,
+					.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+				},
+				{
+					.binding = 2,
+					.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+					.descriptorCount = 1,
+					.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+				}
+			};
+
+			VkDescriptorSetLayoutCreateInfo info{
+				.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+				.bindingCount = sizeof(bindings) / sizeof(bindings[0]),
+				.pBindings = bindings,
+			};
+
+			if (vkCreateDescriptorSetLayout(device, &info, nullptr,
+			                                &texture_descriptor_set_layout) != VK_SUCCESS) {
+				std::cerr << "Failed to create Vulkan texture descriptor set layout\n";
+				veekay::app.running = false;
+				return;
+			}
+		}
+
 		{
 			VkDescriptorSetAllocateInfo info{
 				.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -1239,10 +1410,11 @@ void initialize(VkCommandBuffer cmd) {
 		}
 
 		// NOTE: Declare external data sources, only push constants this time
+		VkDescriptorSetLayout set_layouts[] = {descriptor_set_layout, texture_descriptor_set_layout};
 		VkPipelineLayoutCreateInfo layout_info{
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-			.setLayoutCount = 1,
-			.pSetLayouts = &descriptor_set_layout,
+			.setLayoutCount = 2,
+			.pSetLayouts = set_layouts,
 		};
 
 		// NOTE: Create pipeline layout
@@ -1318,27 +1490,40 @@ void initialize(VkCommandBuffer cmd) {
 		nullptr,
 		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
-	// NOTE: This texture and sampler is used when texture could not be loaded
+	// NOTE: Textures and samplers
 	{
-		VkSamplerCreateInfo info{
-			.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-			.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-		};
+		VkSamplerCreateInfo info{};
+		info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+		info.magFilter = VK_FILTER_LINEAR;
+		info.minFilter = VK_FILTER_LINEAR;
+		info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+		info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		info.mipLodBias = 0.0f;
+		info.minLod = 0.0f;
+		info.maxLod = VK_LOD_CLAMP_NONE;
 
-		if (vkCreateSampler(device, &info, nullptr, &missing_texture_sampler) != VK_SUCCESS) {
+		if (vkCreateSampler(device, &info, nullptr, &texture_sampler) != VK_SUCCESS) {
 			std::cerr << "Failed to create Vulkan texture sampler\n";
 			veekay::app.running = false;
 			return;
 		}
 
-		uint32_t pixels[] = {
+		missing_texture_sampler = texture_sampler;
+
+		uint32_t checker[] = {
 			0xff000000, 0xffff00ff,
 			0xffff00ff, 0xff000000,
 		};
 
 		missing_texture = new veekay::graphics::Texture(cmd, 2, 2,
 		                                                VK_FORMAT_B8G8R8A8_UNORM,
-		                                                pixels);
+		                                                checker);
+		white_texture = make_solid_texture(cmd, 0xffffffff);
+		black_texture = make_solid_texture(cmd, 0xff000000);
+		default_texture_set = create_texture_set(device, missing_texture, white_texture, black_texture);
+		white_texture_set = create_texture_set(device, white_texture, white_texture, black_texture);
 	}
 
 	{
@@ -1437,46 +1622,59 @@ void initialize(VkCommandBuffer cmd) {
 		const float base_distance = 1.0f;
 
 		// Солнце
-		size_t sun_idx = add_planet({0.0f, 0.0f, 0.0f}, 1.5f, YellowSun, "Sun");
+	size_t sun_idx = add_planet({0.0f, 0.0f, 0.0f}, 1.5f, YellowSun, "Sun");
+	sun_model_index = sun_idx;
+	spin_targets.push_back({sun_idx, 10.0f});
 
 		// Планеты
-		size_t mercury_idx = add_planet({base_distance * 2.0f, 0.0f, 0.0f}, 0.25f, MercuryMat, "Mercury");
-		add_orbit(mercury_idx, SIZE_MAX, base_distance * 2.0f, 0.206f, 29.0f, 0.24f);
+	size_t mercury_idx = add_planet({base_distance * 2.0f, 0.0f, 0.0f}, 0.25f, MercuryMat, "Mercury");
+	add_orbit(mercury_idx, SIZE_MAX, base_distance * 2.0f, 0.206f, 29.0f, 0.24f);
+	spin_targets.push_back({mercury_idx, 25.0f});
 
 	size_t venus_idx = add_planet({base_distance * 3.0f, 0.0f, 0.0f}, 0.35f, VenusMat, "Venus");
 	add_orbit(venus_idx, SIZE_MAX, base_distance * 3.0f, 0.007f, 77.0f, 0.62f);
+	spin_targets.push_back({venus_idx, 15.0f});
 
 	size_t earth_idx = add_planet({base_distance * 4.0f, 0.0f, 0.0f}, 0.4f, EarthMat, "Earth");
 	add_orbit(earth_idx, SIZE_MAX, base_distance * 4.0f, 0.017f, 0.0f, 1.0f);
+	spin_targets.push_back({earth_idx, 20.0f});
 
 	size_t moon_idx = add_planet({base_distance * 4.6f, 0.0f, 0.0f}, 0.12f, MoonMat, "Moon");
 	add_orbit(moon_idx, earth_idx, 0.7f, 0.055f, 0.0f, 0.075f);
+	spin_targets.push_back({moon_idx, 40.0f});
 
 	size_t mars_idx = add_planet({base_distance * 5.0f, 0.0f, 0.0f}, 0.3f, MarsMat, "Mars");
 	add_orbit(mars_idx, SIZE_MAX, base_distance * 5.0f, 0.093f, 49.0f, 1.88f);
+	spin_targets.push_back({mars_idx, 18.0f});
 
 	size_t jupiter_idx = add_planet({base_distance * 7.0f, 0.0f, 0.0f}, 0.9f, JupiterMat, "Jupiter");
 	add_orbit(jupiter_idx, SIZE_MAX, base_distance * 7.0f, 0.048f, 100.0f, 11.86f);
+	spin_targets.push_back({jupiter_idx, 30.0f});
 
 	size_t saturn_idx = add_planet({base_distance * 9.0f, 0.0f, 0.0f}, 0.8f, SaturnMat, "Saturn");
 	add_orbit(saturn_idx, SIZE_MAX, base_distance * 9.0f, 0.054f, 113.0f, 29.46f);
+	spin_targets.push_back({saturn_idx, 28.0f});
 
 		// Кольцо Сатурна
 		Ring({0.0f, 0.0f, 0.0f}, 1.0f, 1.6f, 64, RingMat, "Saturn Ring");
 		size_t ring_idx = models.size() - 1;
+		saturn_ring_model_index = ring_idx;
 		add_orbit(ring_idx, saturn_idx, 0.0f, 0.0f, 0.0f, 1.0f); // прицеплено к Сатурну
 
-		size_t uranus_idx = add_planet({base_distance * 11.0f, 0.0f, 0.0f}, 0.7f, UranusMat, "Uranus");
-		add_orbit(uranus_idx, SIZE_MAX, base_distance * 11.0f, 0.047f, 74.0f, 84.01f);
+	size_t uranus_idx = add_planet({base_distance * 11.0f, 0.0f, 0.0f}, 0.7f, UranusMat, "Uranus");
+	add_orbit(uranus_idx, SIZE_MAX, base_distance * 11.0f, 0.047f, 74.0f, 84.01f);
+	spin_targets.push_back({uranus_idx, 24.0f});
 
-		size_t neptune_idx = add_planet({base_distance * 13.0f, 0.0f, 0.0f}, 0.7f, NeptuneMat, "Neptune");
-		add_orbit(neptune_idx, SIZE_MAX, base_distance * 13.0f, 0.009f, 131.0f, 164.79f);
+	size_t neptune_idx = add_planet({base_distance * 13.0f, 0.0f, 0.0f}, 0.7f, NeptuneMat, "Neptune");
+	add_orbit(neptune_idx, SIZE_MAX, base_distance * 13.0f, 0.009f, 131.0f, 164.79f);
+	spin_targets.push_back({neptune_idx, 20.0f});
 
 		// 0.1 Звёзды: 30 эмиссивных сфер на небесной сфере, перераспавн при окончании жизни
 		const int star_count = 50;
 		for (int i = 0; i < star_count; ++i) {
 			size_t idx_before = models.size();
 			Sphere({0.0f, 0.0f, 0.0f}, 0.05f, 8, 12, StarMat, "Star");
+			models[idx_before].texture_set = white_texture_set;
 			StarInstance s;
 			s.model_index = idx_before;
 			s.base_color = StarMat.albedo_color;
@@ -1526,14 +1724,36 @@ void initialize(VkCommandBuffer cmd) {
 				models[spotlight_model_indices[i]].transform.scale = {1.0f, 1.0f, 1.0f};
 			}
 		}
+
+		auto set_tex = [&](size_t idx, const std::string& albedo, const std::string& spec = std::string(), const std::string& emissive = std::string(), float warp = 0.0f) {
+			if (idx >= models.size()) return;
+			size_t tex_idx = create_texture_set_from_paths(cmd, albedo, spec, emissive);
+			models[idx].texture_set = tex_idx;
+			models[idx].material.warp_strength = warp;
+		};
+
+		set_tex(sun_idx, "textures/2k_sun.jpg");
+		set_tex(mercury_idx, "textures/2k_mercury.jpg");
+		set_tex(venus_idx, "textures/2k_venus_surface.jpg");
+		set_tex(earth_idx, "textures/2k_earth_daymap.jpg", "textures/2k_earth_specular_map.tif", "textures/2k_earth_clouds.jpg");
+		set_tex(moon_idx, "textures/2k_moon.jpg");
+		set_tex(mars_idx, "textures/2k_mars.jpg");
+		set_tex(jupiter_idx, "textures/2k_jupiter.jpg");
+		set_tex(saturn_idx, "textures/2k_saturn.jpg");
+		if (saturn_ring_model_index < models.size()) {
+			set_tex(saturn_ring_model_index, "textures/2k_saturn_ring_alpha.png");
+			models[saturn_ring_model_index].material.opacity = 0.6f;
+		}
+		set_tex(uranus_idx, "textures/2k_uranus.jpg");
+		set_tex(neptune_idx, "textures/2k_neptune.jpg");
+		if (base_model_index < models.size()) {
+			set_tex(base_model_index, "textures/2k_venus_surface.jpg", std::string(), std::string(), 3.0f);
+		}
 	}
 
 // NOTE: Destroy resources here, do not cause leaks in your program!
 void shutdown() {
 	VkDevice& device = veekay::app.vk_device;
-
-	vkDestroySampler(device, missing_texture_sampler, nullptr);
-	delete missing_texture;
 
 	for(auto model : models)
 	{
@@ -1546,7 +1766,21 @@ void shutdown() {
 	delete model_uniforms_buffer;
 	delete scene_uniforms_buffer;
 
+	{
+		std::unordered_set<veekay::graphics::Texture*> cleaned;
+		for (const auto& kv : texture_cache) {
+			if (kv.second && kv.second != missing_texture && kv.second != white_texture && kv.second != black_texture) {
+				if (!cleaned.count(kv.second)) {
+					delete kv.second;
+					cleaned.insert(kv.second);
+				}
+			}
+		}
+		texture_cache.clear();
+	}
+
 	vkDestroyDescriptorSetLayout(device, descriptor_set_layout, nullptr);
+	vkDestroyDescriptorSetLayout(device, texture_descriptor_set_layout, nullptr);
 	vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
 
 	vkDestroyPipeline(device, pipeline_glass, nullptr);
@@ -1554,6 +1788,13 @@ void shutdown() {
 	vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
 	vkDestroyShaderModule(device, fragment_shader_module, nullptr);
 	vkDestroyShaderModule(device, vertex_shader_module, nullptr);
+
+	if (texture_sampler) {
+		vkDestroySampler(device, texture_sampler, nullptr);
+	}
+	if (missing_texture) delete missing_texture;
+	if (white_texture) delete white_texture;
+	if (black_texture) delete black_texture;
 }
 void update(double time) {
     static int selectedModelIndex = 0;
@@ -1909,6 +2150,13 @@ void update(double time) {
 		models[orbit.model_index].transform.position = center + veekay::vec3{x, 0.0f, z};
 	}
 
+	// Вращение вокруг собственной оси
+	for (const auto& spin : spin_targets) {
+		if (spin.first < models.size()) {
+			models[spin.first].transform.rotation.y += dt_f * spin.second;
+		}
+	}
+
 	SceneUniforms scene_uniforms{
 		.view_projection = camera.view_projection(aspect_ratio),
 		.camera_position = veekay::vec4{camera.position.x, camera.position.y, camera.position.z, 0.0f},
@@ -1924,7 +2172,7 @@ void update(double time) {
 		uniforms.model = model.transform.matrix();
 		uniforms.albedo_color = veekay::vec4{model.material.albedo_color.x, model.material.albedo_color.y, model.material.albedo_color.z, 0.0f};
 		uniforms.specular_color = veekay::vec4{model.material.specular_color.x, model.material.specular_color.y, model.material.specular_color.z, 0.0f};
-		uniforms.material = veekay::vec4{model.material.shininess, 0.0f, 0.0f, model.material.opacity};
+		uniforms.material = veekay::vec4{model.material.shininess, model.material.warp_strength, 0.0f, model.material.opacity};
 	}
 
 	*(SceneUniforms*)scene_uniforms_buffer->mapped_region = scene_uniforms;
@@ -2033,8 +2281,14 @@ void render(VkCommandBuffer cmd, VkFramebuffer framebuffer) {
 			}
 
 			uint32_t offset = i * model_uniorms_alignment;
+			size_t tex_index = model.texture_set < texture_sets.size() ? model.texture_set : default_texture_set;
+			VkDescriptorSet tex_set = (tex_index < texture_sets.size()) ? texture_sets[tex_index].descriptor_set : VK_NULL_HANDLE;
+			if (tex_set == VK_NULL_HANDLE && default_texture_set < texture_sets.size()) {
+				tex_set = texture_sets[default_texture_set].descriptor_set;
+			}
+			VkDescriptorSet sets[2] = {descriptor_set, tex_set};
 			vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout,
-			                    0, 1, &descriptor_set, 1, &offset);
+			                    0, 2, sets, 1, &offset);
 
 			vkCmdDrawIndexed(cmd, mesh.indices, 1, 0, 0, 0);
 		}
@@ -2046,11 +2300,11 @@ void render(VkCommandBuffer cmd, VkFramebuffer framebuffer) {
 	});
 
 	// Transparent glass pass
-	if (glass_model_index < models.size()) {
-		draw_models_with_pipeline(pipeline_glass, [&](size_t idx) {
-			return idx == glass_model_index;
-		});
-	}
+	draw_models_with_pipeline(pipeline_glass, [&](size_t idx) {
+		if (idx == glass_model_index) return true;
+		if (saturn_ring_model_index < models.size() && idx == saturn_ring_model_index) return true;
+		return false;
+	});
 
 	vkCmdEndRenderPass(cmd);
 	vkEndCommandBuffer(cmd);
