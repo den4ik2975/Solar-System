@@ -1,7 +1,5 @@
 #include <cstdint>
 #include <algorithm>
-#include <climits>
-#include <cstring>
 #include <vector>
 #include <iostream>
 #include <fstream>
@@ -15,7 +13,6 @@
 
 #include <vulkan/vulkan_core.h>
 #include <imgui.h>
-#include <lodepng.h>
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
@@ -216,9 +213,9 @@ Material GlassMat = {
 };
 
 Material BaseMat = {
-	.albedo_color = veekay::vec3{0.25f, 0.2f, 0.18f},
-	.specular_color = veekay::vec3{0.15f, 0.12f, 0.1f},
-	.shininess = 64.0f
+	.albedo_color = veekay::vec3{1.0f, 1.0f, 1.0f},
+	.specular_color = veekay::vec3{0.25f, 0.22f, 0.2f},
+	.shininess = 32.0f
 };
 
 Material SpotlightMat = {
@@ -1497,9 +1494,9 @@ void initialize(VkCommandBuffer cmd) {
 		info.magFilter = VK_FILTER_LINEAR;
 		info.minFilter = VK_FILTER_LINEAR;
 		info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-		info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-		info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-		info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		info.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		info.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		info.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
 		info.mipLodBias = 0.0f;
 		info.minLod = 0.0f;
 		info.maxLod = VK_LOD_CLAMP_NONE;
@@ -1704,7 +1701,7 @@ void initialize(VkCommandBuffer cmd) {
 			Cylinder({0.0f, 0.0f, 0.0f}, base_radius, base_height, 48, BaseMat, "GlobeBase");
 			base_model_index = idx_before;
 			if (base_model_index < models.size()) {
-				models[base_model_index].transform.position.y = (globe_radius + base_height * 0.5f);
+				models[base_model_index].transform.position.y = (globe_radius + base_height * 0.47f);
 				models[base_model_index].transform.rotation = {90.0f, 0.0f, 0.0f};
 			}
 		}
@@ -1735,7 +1732,7 @@ void initialize(VkCommandBuffer cmd) {
 		set_tex(sun_idx, "textures/2k_sun.jpg");
 		set_tex(mercury_idx, "textures/2k_mercury.jpg");
 		set_tex(venus_idx, "textures/2k_venus_surface.jpg");
-		set_tex(earth_idx, "textures/2k_earth_daymap.jpg", "textures/2k_earth_specular_map.tif", "textures/2k_earth_clouds.jpg");
+		set_tex(earth_idx, "textures/2k_earth_daymap.jpg", "textures/2k_earth_specular_map.png", "textures/2k_earth_clouds.jpg");
 		set_tex(moon_idx, "textures/2k_moon.jpg");
 		set_tex(mars_idx, "textures/2k_mars.jpg");
 		set_tex(jupiter_idx, "textures/2k_jupiter.jpg");
@@ -1747,7 +1744,7 @@ void initialize(VkCommandBuffer cmd) {
 		set_tex(uranus_idx, "textures/2k_uranus.jpg");
 		set_tex(neptune_idx, "textures/2k_neptune.jpg");
 		if (base_model_index < models.size()) {
-			set_tex(base_model_index, "textures/2k_venus_surface.jpg", std::string(), std::string(), 3.0f);
+			set_tex(base_model_index, "textures/rosewood/textures/rosewood_veneer1_diff_2k.jpg", std::string(), std::string(), 0.25f);
 		}
 	}
 
