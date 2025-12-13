@@ -66,10 +66,11 @@ void main() {
 	vec3 k_d = model_data.albedo_color.xyz;   // Диффузная часть
 	vec3 k_s = model_data.specular_color.xyz; // Бликовая часть
 	float shininess = model_data.material.x;  // Степень блеска (экспонента)
+	float alpha = (model_data.material.w > 0.0) ? model_data.material.w : 1.0;
 
 	// 0.6 Эмиссия: при отрицательном shininess не считаем освещение, выводим базовый цвет (Солнце)
 	if (shininess < 0.0) {
-		final_color = vec4(k_d, 1.0);
+		final_color = vec4(k_d, alpha);
 		return;
 	}
 	
@@ -156,5 +157,5 @@ void main() {
 		}
 	}
 	
-	final_color = vec4(result, 1.0f);
+	final_color = vec4(result, alpha);
 }

@@ -92,6 +92,7 @@ struct Material
 	veekay::vec3 albedo_color;
 	veekay::vec3 specular_color = {0.5f, 0.5f, 0.5f};  // Цвет блика
 	float shininess = 32.0f;  // Степень блеска (экспонента)
+	float opacity = 1.0f;     // Альфа для смешивания (1 — непрозрачный)
 };
 
 Material Standart = {
@@ -205,7 +206,8 @@ Material CometTailMat = {
 Material GlassMat = {
 	.albedo_color = veekay::vec3{0.05f, 0.08f, 0.12f},
 	.specular_color = veekay::vec3{0.9f, 0.9f, 1.0f},
-	.shininess = 256.0f // «стеклянный» блеск (пока без прозрачности)
+	.shininess = 256.0f, // «стеклянный» блеск (пока без прозрачности)
+	.opacity = 0.35f
 };
 
 Material BaseMat = {
@@ -800,6 +802,7 @@ inline namespace {
 
 	VkPipelineLayout pipeline_layout;
 	VkPipeline pipeline;
+	VkPipeline pipeline_glass;
 
 	veekay::graphics::Buffer* scene_uniforms_buffer;
 	veekay::graphics::Buffer* model_uniforms_buffer;
@@ -1095,22 +1098,36 @@ void initialize(VkCommandBuffer cmd) {
 		};
 
 		// NOTE: Let rasterizer perform depth-testing and overwrite depth values on condition pass
-		VkPipelineDepthStencilStateCreateInfo depth_info{
-			.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-			.depthTestEnable = true,
-			.depthWriteEnable = true,
-			.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
-		};
+		VkPipelineDepthStencilStateCreateInfo depth_info{};
+		depth_info.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+		depth_info.depthTestEnable = VK_TRUE;
+		depth_info.depthWriteEnable = VK_TRUE;
+		depth_info.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
 
-		// NOTE: Let fragment shader write all the color channels
-		VkPipelineColorBlendAttachmentState attachment_info{
-			.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
-			                  VK_COLOR_COMPONENT_G_BIT |
-			                  VK_COLOR_COMPONENT_B_BIT |
-			                  VK_COLOR_COMPONENT_A_BIT,
-		};
+		// NOTE: Let fragment shader write all the color channels (opaque)
+		VkPipelineColorBlendAttachmentState attachment_info{};
+		attachment_info.blendEnable = VK_FALSE;
+		attachment_info.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+		attachment_info.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+		attachment_info.colorBlendOp = VK_BLEND_OP_ADD;
+		attachment_info.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+		attachment_info.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+		attachment_info.alphaBlendOp = VK_BLEND_OP_ADD;
+		attachment_info.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
+		                                 VK_COLOR_COMPONENT_G_BIT |
+		                                 VK_COLOR_COMPONENT_B_BIT |
+		                                 VK_COLOR_COMPONENT_A_BIT;
 
-		// NOTE: Let rasterizer just copy resulting pixels onto a buffer, don't blend
+		// NOTE: Blending for glass (alpha)
+		VkPipelineColorBlendAttachmentState attachment_info_glass = attachment_info;
+		attachment_info_glass.blendEnable = VK_TRUE;
+		attachment_info_glass.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+		attachment_info_glass.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+		attachment_info_glass.colorBlendOp = VK_BLEND_OP_ADD;
+		attachment_info_glass.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+		attachment_info_glass.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+		attachment_info_glass.alphaBlendOp = VK_BLEND_OP_ADD;
+
 		VkPipelineColorBlendStateCreateInfo blend_info{
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
 
@@ -1120,6 +1137,9 @@ void initialize(VkCommandBuffer cmd) {
 			.attachmentCount = 1,
 			.pAttachments = &attachment_info
 		};
+
+		VkPipelineColorBlendStateCreateInfo blend_info_glass = blend_info;
+		blend_info_glass.pAttachments = &attachment_info_glass;
 
 		{
 			VkDescriptorPoolSize pools[] = {
@@ -1244,10 +1264,29 @@ void initialize(VkCommandBuffer cmd) {
 			.renderPass = veekay::app.vk_render_pass,
 		};
 
-		// NOTE: Create graphics pipeline
+		// NOTE: Create graphics pipeline (opaque)
 		if (vkCreateGraphicsPipelines(device, nullptr,
 		                              1, &info, nullptr, &pipeline) != VK_SUCCESS) {
 			std::cerr << "Failed to create Vulkan pipeline\n";
+			veekay::app.running = false;
+			return;
+		}
+
+		// Glass pipeline: no culling, depth write off, blending on
+		VkPipelineRasterizationStateCreateInfo raster_info_glass = raster_info;
+		raster_info_glass.cullMode = VK_CULL_MODE_NONE;
+
+		VkPipelineDepthStencilStateCreateInfo depth_info_glass = depth_info;
+		depth_info_glass.depthWriteEnable = false;
+
+		VkGraphicsPipelineCreateInfo info_glass = info;
+		info_glass.pRasterizationState = &raster_info_glass;
+		info_glass.pDepthStencilState = &depth_info_glass;
+		info_glass.pColorBlendState = &blend_info_glass;
+
+		if (vkCreateGraphicsPipelines(device, nullptr,
+		                              1, &info_glass, nullptr, &pipeline_glass) != VK_SUCCESS) {
+			std::cerr << "Failed to create Vulkan glass pipeline\n";
 			veekay::app.running = false;
 			return;
 		}
@@ -1506,6 +1545,7 @@ void shutdown() {
 	vkDestroyDescriptorSetLayout(device, descriptor_set_layout, nullptr);
 	vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
 
+	vkDestroyPipeline(device, pipeline_glass, nullptr);
 	vkDestroyPipeline(device, pipeline, nullptr);
 	vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
 	vkDestroyShaderModule(device, fragment_shader_module, nullptr);
@@ -1870,7 +1910,7 @@ void update(double time) {
 		uniforms.model = model.transform.matrix();
 		uniforms.albedo_color = veekay::vec4{model.material.albedo_color.x, model.material.albedo_color.y, model.material.albedo_color.z, 0.0f};
 		uniforms.specular_color = veekay::vec4{model.material.specular_color.x, model.material.specular_color.y, model.material.specular_color.z, 0.0f};
-		uniforms.material = veekay::vec4{model.material.shininess, 0.0f, 0.0f, 0.0f};
+		uniforms.material = veekay::vec4{model.material.shininess, 0.0f, 0.0f, model.material.opacity};
 	}
 
 	*(SceneUniforms*)scene_uniforms_buffer->mapped_region = scene_uniforms;
@@ -1951,34 +1991,51 @@ void render(VkCommandBuffer cmd, VkFramebuffer framebuffer) {
 		vkCmdBeginRenderPass(cmd, &info, VK_SUBPASS_CONTENTS_INLINE);
 	}
 
-	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 	VkDeviceSize zero_offset = 0;
 
-	VkBuffer current_vertex_buffer = VK_NULL_HANDLE;
-	VkBuffer current_index_buffer = VK_NULL_HANDLE;
+	auto draw_models_with_pipeline = [&](VkPipeline pipe, auto predicate) {
+		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
 
-	const size_t model_uniorms_alignment =
-		veekay::graphics::Buffer::structureAlignment(sizeof(ModelUniforms));
+		VkBuffer current_vertex_buffer = VK_NULL_HANDLE;
+		VkBuffer current_index_buffer = VK_NULL_HANDLE;
 
-	for (size_t i = 0, n = models.size(); i < n; ++i) {
-		const Model& model = models[i];
-		const Mesh& mesh = model.mesh;
+		const size_t model_uniorms_alignment =
+			veekay::graphics::Buffer::structureAlignment(sizeof(ModelUniforms));
 
-		if (current_vertex_buffer != mesh.vertex_buffer->buffer) {
-			current_vertex_buffer = mesh.vertex_buffer->buffer;
-			vkCmdBindVertexBuffers(cmd, 0, 1, &current_vertex_buffer, &zero_offset);
+		for (size_t i = 0, n = models.size(); i < n; ++i) {
+			if (!predicate(i)) continue;
+
+			const Model& model = models[i];
+			const Mesh& mesh = model.mesh;
+
+			if (current_vertex_buffer != mesh.vertex_buffer->buffer) {
+				current_vertex_buffer = mesh.vertex_buffer->buffer;
+				vkCmdBindVertexBuffers(cmd, 0, 1, &current_vertex_buffer, &zero_offset);
+			}
+
+			if (current_index_buffer != mesh.index_buffer->buffer) {
+				current_index_buffer = mesh.index_buffer->buffer;
+				vkCmdBindIndexBuffer(cmd, current_index_buffer, zero_offset, VK_INDEX_TYPE_UINT32);
+			}
+
+			uint32_t offset = i * model_uniorms_alignment;
+			vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout,
+			                    0, 1, &descriptor_set, 1, &offset);
+
+			vkCmdDrawIndexed(cmd, mesh.indices, 1, 0, 0, 0);
 		}
+	};
 
-		if (current_index_buffer != mesh.index_buffer->buffer) {
-			current_index_buffer = mesh.index_buffer->buffer;
-			vkCmdBindIndexBuffer(cmd, current_index_buffer, zero_offset, VK_INDEX_TYPE_UINT32);
-		}
+	// Opaque pass: draw everything except glass
+	draw_models_with_pipeline(pipeline, [&](size_t idx) {
+		return idx != glass_model_index;
+	});
 
-		uint32_t offset = i * model_uniorms_alignment;
-		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout,
-		                    0, 1, &descriptor_set, 1, &offset);
-
-		vkCmdDrawIndexed(cmd, mesh.indices, 1, 0, 0, 0);
+	// Transparent glass pass
+	if (glass_model_index < models.size()) {
+		draw_models_with_pipeline(pipeline_glass, [&](size_t idx) {
+			return idx == glass_model_index;
+		});
 	}
 
 	vkCmdEndRenderPass(cmd);
