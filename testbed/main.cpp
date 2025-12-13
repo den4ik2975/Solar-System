@@ -950,6 +950,7 @@ size_t create_texture_set(VkDevice device, veekay::graphics::Texture* albedo, ve
 		vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);
 	}
 
+	// 3.3 Формируем отдельный набор дескрипторов с тремя текстурами материала
 	texture_sets.push_back(set);
 	return texture_sets.size() - 1;
 }
@@ -1358,6 +1359,7 @@ void initialize(VkCommandBuffer cmd) {
 
 		// Layout for textures (albedo, specular, emissive)
 		{
+			// 3.1 Макет для привязки трех текстур материала (albedo/spec/emissive) в отдельный набор дескрипторов
 			VkDescriptorSetLayoutBinding bindings[] = {
 				{
 					.binding = 0,
@@ -1491,6 +1493,7 @@ void initialize(VkCommandBuffer cmd) {
 
 	// NOTE: Textures and samplers
 	{
+		// 3.2 Создаем сэмплер (линейная фильтрация, мипы, repeat) для всех материалов
 		VkSamplerCreateInfo info{};
 		info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
 		info.magFilter = VK_FILTER_LINEAR;
@@ -1731,6 +1734,7 @@ void initialize(VkCommandBuffer cmd) {
 			}
 		}
 
+		// 3.4 Привязываем уникальные наборы текстур к моделям (albedo/spec/emissive)
 		auto set_tex = [&](size_t idx, const std::string& albedo, const std::string& spec = std::string(), const std::string& emissive = std::string(), float warp = 0.0f) {
 			if (idx >= models.size()) return;
 			size_t tex_idx = create_texture_set_from_paths(cmd, albedo, spec, emissive);

@@ -9,6 +9,7 @@ layout (location = 0) out vec4 final_color;
 layout (set = 1, binding = 0) uniform sampler2D tex_albedo;
 layout (set = 1, binding = 1) uniform sampler2D tex_specular;
 layout (set = 1, binding = 2) uniform sampler2D tex_emissive;
+// 3.5 Сэмплируем три текстуры материала (альбедо/спекуляр/эмиссия) из отдельного набора
 
 struct DirectionalLight {
 	vec4 direction;
@@ -70,6 +71,7 @@ void main() {
 	float warp = max(model_data.material.y, 0.0);
 	vec2 uv = f_uv;
 	if (warp > 0.0) {
+		// 3.6 Нетривиальная анимация UV (дрейф+лёгкий вихрь) для выбранных материалов
 		float t = scene.time.x;
 		uv += vec2(t * 0.02, t * 0.01); // gentle drift
 		vec2 centered = uv - vec2(0.5);
