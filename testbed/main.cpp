@@ -202,6 +202,24 @@ Material CometTailMat = {
 	.shininess = -1.0f // эмиссивный хвост
 };
 
+Material GlassMat = {
+	.albedo_color = veekay::vec3{0.05f, 0.08f, 0.12f},
+	.specular_color = veekay::vec3{0.9f, 0.9f, 1.0f},
+	.shininess = 256.0f // «стеклянный» блеск (пока без прозрачности)
+};
+
+Material BaseMat = {
+	.albedo_color = veekay::vec3{0.25f, 0.2f, 0.18f},
+	.specular_color = veekay::vec3{0.15f, 0.12f, 0.1f},
+	.shininess = 64.0f
+};
+
+Material SpotlightMat = {
+	.albedo_color = veekay::vec3{0.8f, 0.8f, 0.9f},
+	.specular_color = veekay::vec3{0.0f, 0.0f, 0.0f},
+	.shininess = -1.0f // эмиссия корпуса прожектора
+};
+
 struct Model : GameObject {
 	Mesh mesh;
 	std::string title;
@@ -290,8 +308,19 @@ struct CometInstance {
 	bool lookat_state_valid = true;
 	bool transform_state_valid = true;
 
-	std::vector<Model> models;
-	std::vector<Orbit> orbits;
+std::vector<Model> models;
+std::vector<Orbit> orbits;
+constexpr float globe_radius = 15.0f;
+constexpr float base_height = 2.0f;
+constexpr float base_radius = 12.0f;
+constexpr float projector_radius = 0.1f;
+constexpr float projector_length = 0.6f;
+size_t glass_model_index = SIZE_MAX;
+size_t base_model_index = SIZE_MAX;
+size_t spotlight_model_indices[8] = {
+	SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX,
+	SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX
+};
 }
 
 struct Plane : Model {
@@ -554,6 +583,96 @@ struct StretchedSphere : Model {
 	StretchedSphere(veekay::vec3 position, float radius, float stretch, uint32_t stacks, uint32_t slices, Material material, std::string title = "StretchedSphere")
 	{
 		mesh = make_stretched_sphere_mesh(radius, stretch, stacks, slices);
+		transform.position = position;
+		this->material = material;
+		this->title = title;
+		models.push_back(*this);
+	}
+};
+
+struct Cylinder : Model {
+	// Цилиндр вдоль оси Z (z = [-height/2, height/2])
+	Cylinder(veekay::vec3 position, float radius, float height, uint32_t segments, Material material, std::string title = "Cylinder")
+	{
+		std::vector<Vertex> vertices;
+		std::vector<uint32_t> indices;
+		float half_h = height * 0.5f;
+
+		// Боковая поверхность
+		for (uint32_t i = 0; i <= segments; ++i) {
+			float u = float(i) / float(segments);
+			float angle = u * float(M_PI) * 2.0f;
+			float c = std::cos(angle);
+			float s = std::sin(angle);
+			veekay::vec3 normal = {c, s, 0.0f};
+
+			vertices.push_back({{radius * c, radius * s, half_h}, normal, {u, 1.0f}});
+			vertices.push_back({{radius * c, radius * s, -half_h}, normal, {u, 0.0f}});
+		}
+
+		for (uint32_t i = 0; i < segments; ++i) {
+			uint32_t top1 = i * 2;
+			uint32_t bot1 = top1 + 1;
+			uint32_t top2 = top1 + 2;
+			uint32_t bot2 = top1 + 3;
+
+			indices.push_back(top1);
+			indices.push_back(bot1);
+			indices.push_back(top2);
+
+			indices.push_back(bot1);
+			indices.push_back(bot2);
+			indices.push_back(top2);
+		}
+
+		// Верхняя крышка
+		uint32_t top_center_idx = static_cast<uint32_t>(vertices.size());
+		vertices.push_back({{0.0f, 0.0f, half_h}, {0.0f, 0.0f, 1.0f}, {0.5f, 0.5f}});
+		uint32_t top_start_idx = static_cast<uint32_t>(vertices.size());
+		for (uint32_t i = 0; i <= segments; ++i) {
+			float u = float(i) / float(segments);
+			float angle = u * float(M_PI) * 2.0f;
+			float c = std::cos(angle);
+			float s = std::sin(angle);
+			vertices.push_back({{radius * c, radius * s, half_h}, {0.0f, 0.0f, 1.0f}, {u, 1.0f}});
+		}
+		for (uint32_t i = 0; i < segments; ++i) {
+			uint32_t a = top_start_idx + i;
+			uint32_t b = top_start_idx + i + 1;
+			indices.push_back(top_center_idx);
+			indices.push_back(a);
+			indices.push_back(b);
+		}
+
+		// Нижняя крышка
+		uint32_t bottom_center_idx = static_cast<uint32_t>(vertices.size());
+		vertices.push_back({{0.0f, 0.0f, -half_h}, {0.0f, 0.0f, -1.0f}, {0.5f, 0.5f}});
+		uint32_t bottom_start_idx = static_cast<uint32_t>(vertices.size());
+		for (uint32_t i = 0; i <= segments; ++i) {
+			float u = float(i) / float(segments);
+			float angle = u * float(M_PI) * 2.0f;
+			float c = std::cos(angle);
+			float s = std::sin(angle);
+			vertices.push_back({{radius * c, radius * s, -half_h}, {0.0f, 0.0f, -1.0f}, {u, 0.0f}});
+		}
+		for (uint32_t i = 0; i < segments; ++i) {
+			uint32_t a = bottom_start_idx + i;
+			uint32_t b = bottom_start_idx + i + 1;
+			indices.push_back(bottom_center_idx);
+			indices.push_back(b);
+			indices.push_back(a);
+		}
+
+		mesh.vertex_buffer = new veekay::graphics::Buffer(
+			vertices.size() * sizeof(Vertex), vertices.data(),
+			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+
+		mesh.index_buffer = new veekay::graphics::Buffer(
+			indices.size() * sizeof(uint32_t), indices.data(),
+			VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+
+		mesh.indices = uint32_t(indices.size());
+
 		transform.position = position;
 		this->material = material;
 		this->title = title;
@@ -1249,6 +1368,7 @@ void initialize(VkCommandBuffer cmd) {
 		// 0.4 Сцена солнечной системы: планеты/кольцо, с масштабированием расстояний под окно
 		//    Используем эксцентриситет/период/угол из planets.md, полуось b = a*sqrt(1-e^2)
 		// Plane({0.0f, 0.0f, 0.0f}, Standart, "Ecliptic");
+		star_spawner.radius = globe_radius - 1.0f;
 
 	const auto add_orbit = [&](size_t model_index, size_t parent_index, float a, float e, float rotation_deg, float period_years, float phase = 0.0f) {
 		float b = a * std::sqrt(1.0f - e * e);
@@ -1335,6 +1455,33 @@ void initialize(VkCommandBuffer cmd) {
 			c.light_slot = static_cast<uint32_t>(1 + i); // слоты 1..2 под кометы (0 — Солнце)
 			comet_spawner.respawn(c, rng);
 			comets.push_back(c);
+		}
+
+		// Основание глобуса
+		{
+			size_t idx_before = models.size();
+			Cylinder({0.0f, 0.0f, 0.0f}, base_radius, base_height, 48, BaseMat, "GlobeBase");
+			base_model_index = idx_before;
+			if (base_model_index < models.size()) {
+				models[base_model_index].transform.position.y = -(globe_radius + base_height * 0.5f);
+				models[base_model_index].transform.rotation = {90.0f, 0.0f, 0.0f};
+			}
+		}
+
+		// Стеклянный купол (пока непрозрачный материал с сильным бликом)
+		{
+			glass_model_index = models.size();
+			Sphere({0.0f, 0.0f, 0.0f}, globe_radius, 24, 36, GlassMat, "GlassGlobe");
+		}
+
+		// Корпуса прожекторов для 8 источников
+		for (uint32_t i = 0; i < 8; ++i) {
+			size_t idx_before = models.size();
+			Cylinder({0.0f, 0.0f, 0.0f}, projector_radius, projector_length, 24, SpotlightMat, "SpotlightModel");
+			spotlight_model_indices[i] = idx_before;
+			if (spotlight_model_indices[i] < models.size()) {
+				models[spotlight_model_indices[i]].transform.scale = {1.0f, 1.0f, 1.0f};
+			}
 		}
 	}
 
@@ -1611,6 +1758,19 @@ void update(double time) {
 			spotlight_base_color[i].y * spotlight_intensity[i],
 			spotlight_base_color[i].z * spotlight_intensity[i],
 			0.0f};
+
+		if (spotlight_model_indices[i] < models.size()) {
+			Model& marker = models[spotlight_model_indices[i]];
+			float yaw = std::atan2(spot_dir.x, spot_dir.z) * 180.0f / float(M_PI);
+			float pitch = std::asin(-spot_dir.y) * 180.0f / float(M_PI);
+			marker.transform.rotation = {pitch, yaw, 0.0f};
+			marker.transform.position = {spotlights[i].position.x, spotlights[i].position.y, spotlights[i].position.z};
+			marker.material.albedo_color = veekay::vec3{
+				spotlights[i].color.x,
+				spotlights[i].color.y,
+				spotlights[i].color.z
+			};
+		}
 	}
 
 	// Apply sun intensity to the first point light color but keep user-editable base
