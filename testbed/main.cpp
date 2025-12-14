@@ -208,7 +208,7 @@ Material CometTailMat = {
 };
 
 Material GlassMat = {
-	.albedo_color = veekay::vec3{0.8f, 0.85f, 0.9f},
+	.albedo_color = veekay::vec3{0.51f, 0.81f, 0.92f},
 	.specular_color = veekay::vec3{0.9f, 0.9f, 1.0f},
 	.shininess = 256.0f, // «стеклянный» блеск (пока без прозрачности)
 	.opacity = 0.25f
@@ -305,8 +305,8 @@ struct CometInstance {
 	// NOTE: Scene objects
 	inline namespace {
 		Camera camera{
-			.position = {0.0f, -2.0f, -12.0f},
-        .rotation = {0.0f, 0.0f, 0.0f}  // x pitch = 0°, y  yaw = 0°, roll = 0° 
+			.position = {0.0f, -2.0f, -40.0f},
+			.rotation = {0.0f, 0.0f, 0.0f}  // x pitch = 0°, y  yaw = 0°, roll = 0°
 		};
 
 	CameraState lookat_state{
@@ -345,6 +345,8 @@ size_t default_texture_set = SIZE_MAX;
 size_t white_texture_set = SIZE_MAX;
 std::unordered_map<std::string, veekay::graphics::Texture*> texture_cache;
 std::vector<std::pair<size_t, float>> spin_targets; // model index, deg/sec
+size_t shaft_model_index = SIZE_MAX;
+size_t support_model_indices[4] = {SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX};
 }
 
 struct Plane : Model {
@@ -1715,6 +1717,54 @@ void initialize(VkCommandBuffer cmd) {
 			}
 		}
 
+		// Вращающийся вал от базы к Солнцу (декоративный)
+		{
+			float base_y = models[base_model_index].transform.position.y;
+			float shaft_len = std::max(0.5f, base_y - 0.5f);
+			size_t idx_before = models.size();
+			Cube({0.0f, 0.0f, 0.0f}, BaseMat, "Shaft", {0.25f, shaft_len, 0.25f});
+			shaft_model_index = idx_before;
+			if (shaft_model_index < models.size()) {
+				models[shaft_model_index].transform.position = {0.0f, base_y * 0.5f, 0.0f};
+				size_t metal_tex = create_texture_set_from_paths(cmd, "textures/metal/2K-metal_1-diffuse.jpg", "textures/metal/2K-metal_1-specular.jpg");
+				models[shaft_model_index].texture_set = metal_tex;
+			}
+		}
+
+		// Наклонные опоры к стеклу
+		for (int i = 0; i < 4; ++i) {
+			float angle = toRadians(45.0f + 90.0f * i);
+			veekay::vec3 dir = {std::cos(angle), 0.0f, std::sin(angle)};
+			float base_y_pos = models[base_model_index].transform.position.y;
+			float y_bottom = base_y_pos - base_height * 0.5f - 0.1f; // опора стартует чуть выше базы (учитываем инверсию Y)
+			veekay::vec3 bottom = dir * (base_radius * 0.55f); // ближе к центру
+			bottom.y = y_bottom;
+
+			// короткая опора вверх и чуть внутрь
+			veekay::vec3 top = bottom - veekay::vec3{dir.x * 0.15f, 1.2f, dir.z * 0.15f};
+
+			veekay::vec3 span = top - bottom;
+			float length = std::sqrt(span.x * span.x + span.y * span.y + span.z * span.z);
+			float yaw = std::atan2(span.x, span.z) * 180.0f / float(M_PI);
+			float pitch = std::asin(-span.y / std::max(length, 1e-4f)) * 180.0f / float(M_PI);
+
+			size_t idx_before = models.size();
+			Cylinder({0.0f, 0.0f, 0.0f}, 0.12f, 1.0f, 24, BaseMat, "Support");
+			support_model_indices[i] = idx_before;
+			if (support_model_indices[i] < models.size()) {
+				Model& sup = models[support_model_indices[i]];
+				sup.transform.position = bottom + span * 0.5f;
+				sup.transform.scale = {1.0f, 1.0f, -length}; // инвертируем Z, чтобы фронт-фейсы смотрели наружу, как у базы
+				sup.transform.rotation = {pitch, yaw, 0.0f};
+				sup.texture_set = default_texture_set; // переопределим корректным деревом после загрузки текстур
+				sup.material.warp_strength = 0.0f;
+				sup.material.emissive_pulse = 0.0f;
+				sup.material.albedo_color = veekay::vec3{1.0f, 1.0f, 1.0f};
+				sup.material.specular_color = BaseMat.specular_color;
+				sup.material.shininess = BaseMat.shininess;
+			}
+		}
+
 		// Стеклянный купол (пока непрозрачный материал с сильным бликом)
 		{
 			glass_model_index = models.size();
@@ -1759,6 +1809,20 @@ void initialize(VkCommandBuffer cmd) {
 		set_tex(neptune_idx, "textures/2k_neptune.jpg");
 		if (base_model_index < models.size()) {
 			set_tex(base_model_index, "textures/rosewood/textures/rosewood_veneer1_diff_2k.jpg", std::string(), std::string(), 0.25f);
+			size_t base_tex = models[base_model_index].texture_set;
+			for (int i = 0; i < 4; ++i) {
+				if (support_model_indices[i] < models.size()) {
+					Model& sup = models[support_model_indices[i]];
+					sup.texture_set = base_tex;
+					sup.material.albedo_color = veekay::vec3{1.0f, 1.0f, 1.0f};
+					sup.material.specular_color = BaseMat.specular_color;
+					sup.material.shininess = BaseMat.shininess;
+					sup.material.warp_strength = 0.0f;
+					sup.material.emissive_pulse = 0.0f;
+					sup.material.opacity = 1.0f;
+					// 3.* Опоры отрисовываются внешней стороной (см. инверсию Z-скейла при создании)
+				}
+			}
 		}
 	}
 
@@ -2164,8 +2228,12 @@ void update(double time) {
 	// Вращение вокруг собственной оси
 	for (const auto& spin : spin_targets) {
 		if (spin.first < models.size()) {
-			models[spin.first].transform.rotation.y += dt_f * spin.second;
+			models[spin.first].transform.rotation.y -= dt_f * spin.second;
 		}
+	}
+	// Вращаем вал в такт ускорению орбит
+	if (shaft_model_index < models.size()) {
+		models[shaft_model_index].transform.rotation.y += dt_f * orbit_speedup * 10.0f;
 	}
 
 	SceneUniforms scene_uniforms{
