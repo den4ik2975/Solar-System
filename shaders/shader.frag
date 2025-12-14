@@ -3,13 +3,10 @@
 layout (location = 0) in vec3 f_position;
 layout (location = 1) in vec3 f_normal;
 layout (location = 2) in vec2 f_uv;
+layout (location = 3) in vec4 f_shadow_dir;
+layout (location = 4) in vec4 f_shadow_spot;
 
 layout (location = 0) out vec4 final_color;
-
-layout (set = 1, binding = 0) uniform sampler2D tex_albedo;
-layout (set = 1, binding = 1) uniform sampler2D tex_specular;
-layout (set = 1, binding = 2) uniform sampler2D tex_emissive;
-// 3.5 Сэмплируем три текстуры материала (альбедо/спекуляр/эмиссия) из отдельного набора
 
 struct DirectionalLight {
 	vec4 direction;
@@ -38,6 +35,9 @@ layout (binding = 0, std140) uniform SceneUniforms {
 	vec4 camera_position;   // 2.5 Позиция камеры в мировых координатах
 	LightingData lighting;  // 2.5 Фоновый свет и направленный источник
 	vec4 time;              // x = time
+	mat4 shadow_view_projection_dir;
+	mat4 shadow_view_projection_spot;
+	vec4 shadow_meta;       // x: spot shadow enabled (0/1), y: shadowed spot index, z: point far, w: point near
 } scene;
 
 layout (binding = 1, std140) uniform ModelUniforms {
@@ -63,10 +63,59 @@ layout (binding = 3, std430) readonly buffer SpotlightsBuffer {
 	Spotlight lights[]; // 2.7 Массив прожекторов (std430)
 } spotlights;
 
+layout (set = 0, binding = 4) uniform sampler2DShadow shadow_texture_dir;
+layout (set = 0, binding = 5) uniform sampler2DShadow shadow_texture_spot;
+layout (set = 0, binding = 6) uniform samplerCubeShadow shadow_texture_point;
+
+layout (set = 1, binding = 0) uniform sampler2D tex_albedo;
+layout (set = 1, binding = 1) uniform sampler2D tex_specular;
+layout (set = 1, binding = 2) uniform sampler2D tex_emissive;
+
+float sampleShadow(sampler2DShadow shadow_tex, vec4 shadow_position) {
+	vec3 coord = shadow_position.xyz / shadow_position.w;
+	if (coord.z <= 0.0 || coord.z >= 1.0) {
+		return 1.0;
+	}
+	coord.xy = coord.xy * 0.5 + 0.5;
+	if (coord.x < 0.0 || coord.x > 1.0 || coord.y < 0.0 || coord.y > 1.0) {
+		return 1.0;
+	}
+	coord.z -= 0.001;
+	return texture(shadow_tex, coord);
+}
+
+float projectDepth(float z_eye, float near_plane, float far_plane) {
+	float denom = far_plane - near_plane;
+	if (denom <= 0.0) return 1.0;
+	return (far_plane / denom) - (far_plane * near_plane) / (denom * z_eye);
+}
+
+float samplePointShadow(vec3 to_light, float near_plane, float far_plane) {
+	float dist = length(to_light);
+	if (far_plane <= near_plane || dist <= 0.0001) return 1.0;
+	vec3 dir = normalize(to_light);
+
+	// Pick the face the cube map will use and project along that forward axis
+	vec3 face_forward;
+	if (abs(dir.x) > abs(dir.y) && abs(dir.x) > abs(dir.z)) {
+		face_forward = vec3(sign(dir.x), 0.0, 0.0);
+	} else if (abs(dir.y) > abs(dir.z)) {
+		face_forward = vec3(0.0, sign(dir.y), 0.0);
+	} else {
+		face_forward = vec3(0.0, 0.0, sign(dir.z));
+	}
+
+	float z_eye = dist * max(dot(dir, face_forward), 0.0);
+	float compare = projectDepth(z_eye, near_plane, far_plane);
+	// Small bias to reduce acne/flicker
+	compare = clamp(compare - 0.001, 0.0, 1.0);
+	return texture(shadow_texture_point, vec4(dir, compare));
+}
+
 void main() {
 	vec3 N = normalize(f_normal);
 	vec3 V = normalize(scene.camera_position.xyz - f_position);
-	
+
 	// 2.8 Свойства материала для Блинн-Фонга
 	float warp = max(model_data.material.y, 0.0);
 	vec2 uv = f_uv;
@@ -110,6 +159,15 @@ void main() {
 	// 2.8 Фоновая составляющая
 	vec3 ambient = scene.lighting.ambient_color.xyz * k_a;
 	vec3 result = ambient;
+	float shadow_dir = sampleShadow(shadow_texture_dir, f_shadow_dir);
+	float shadow_spot = sampleShadow(shadow_texture_spot, f_shadow_spot);
+	int spot_shadow_enabled = int(scene.shadow_meta.x + 0.5);
+	int shadowed_spot_index = int(round(scene.shadow_meta.y));
+	uint point_light_count = point_lights.count;
+	float shadow_point = 1.0;
+	if (point_light_count > 0) {
+		shadow_point = samplePointShadow(f_position - point_lights.lights[0].position.xyz, scene.shadow_meta.w, scene.shadow_meta.z);
+	}
 	
 	// 2.8 Направленный источник (остался в API): стандартный Blinn-Phong
 	// Направление уже указывает в сторону источника
@@ -125,12 +183,11 @@ void main() {
 		float NdotH_dir = max(dot(N, H_dir), 0.0);
 		vec3 specular = k_s * scene.lighting.directional_light.color.xyz * pow(NdotH_dir, shininess);
 		
-		result += diffuse + specular;
+		result += (diffuse + specular) * shadow_dir;
 	}
 	
 	// 2.8 Точечные источники из SSBO: закон обратных квадратов + Blinn-Phong
 	// Считаем затухание 1/dist^2 и добавляем диффуз/блик для каждого источника
-	uint point_light_count = point_lights.count;
 	for (uint i = 0; i < point_light_count && i < 8; i++) {
 		vec3 L_vec = point_lights.lights[i].position.xyz - f_position;
 		float distance = length(L_vec);
@@ -150,7 +207,8 @@ void main() {
 			float NdotH = max(dot(N, H), 0.0);
 			vec3 specular = k_s * point_lights.lights[i].color.xyz * pow(NdotH, shininess) * attenuation;
 			
-			result += diffuse + specular;
+			float shadow_term = (i == 0) ? shadow_point : 1.0;
+			result += (diffuse + specular) * shadow_term;
 		}
 	}
 	
@@ -186,7 +244,12 @@ void main() {
 			float NdotH = max(dot(N, H), 0.0);
 			vec3 specular = k_s * spotlights.lights[i].color.xyz * pow(NdotH, shininess) * attenuation;
 			
-			result += diffuse + specular;
+			float spot_shadow_term = 1.0;
+			if ((spot_shadow_enabled != 0) && shadowed_spot_index == int(i)) {
+				spot_shadow_term = shadow_spot;
+			}
+
+			result += (diffuse + specular) * spot_shadow_term;
 		}
 	}
 	

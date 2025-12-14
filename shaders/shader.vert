@@ -7,9 +7,27 @@ layout (location = 2) in vec2 v_uv;
 layout (location = 0) out vec3 f_position;
 layout (location = 1) out vec3 f_normal;
 layout (location = 2) out vec2 f_uv;
+layout (location = 3) out vec4 f_shadow_dir;
+layout (location = 4) out vec4 f_shadow_spot;
+
+struct DirectionalLight {
+	vec4 direction;
+	vec4 color;
+};
+
+struct LightingData {
+	vec4 ambient_color;
+	DirectionalLight directional_light;
+};
 
 layout (binding = 0, std140) uniform SceneUniforms {
 	mat4 view_projection;
+	vec4 camera_position;
+	LightingData lighting;
+	vec4 time;
+	mat4 shadow_view_projection_dir;
+	mat4 shadow_view_projection_spot;
+	vec4 shadow_meta;
 } scene;
 
 layout (binding = 1, std140) uniform ModelUniforms {
@@ -31,4 +49,6 @@ void main() {
 	f_position = position.xyz;
 	f_normal = normalize(normal);
 	f_uv = v_uv;
+	f_shadow_dir = scene.shadow_view_projection_dir * position;
+	f_shadow_spot = scene.shadow_view_projection_spot * position;
 }
