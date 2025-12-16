@@ -3373,7 +3373,7 @@ void update(double time) {
 	light_dir = veekay::vec3::normalized(light_dir);
 
 	// Same offset, but from the *scene center*, not the camera
-	veekay::vec3 shadow_eye = center - light_dir * 30.0f;
+	veekay::vec3 shadow_eye = center + light_dir * 30.0f;
 
 	dir_shadow_matrix =
 		make_look_at(shadow_eye, center) *

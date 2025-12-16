@@ -155,7 +155,7 @@ void main() {
 		final_color = vec4((k_d + emissive_sample.rgb), alpha);
 		return;
 	}
-	
+
 	// 2.8 Фоновая составляющая
 	vec3 ambient = scene.lighting.ambient_color.xyz * k_a;
 	vec3 result = ambient;
@@ -168,7 +168,7 @@ void main() {
 	if (point_light_count > 0) {
 		shadow_point = samplePointShadow(f_position - point_lights.lights[0].position.xyz, scene.shadow_meta.w, scene.shadow_meta.z);
 	}
-	
+
 	// 2.8 Направленный источник (остался в API): стандартный Blinn-Phong
 	// Направление уже указывает в сторону источника
 	vec3 L_dir = normalize(scene.lighting.directional_light.direction.xyz);
