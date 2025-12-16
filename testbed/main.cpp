@@ -757,6 +757,10 @@ struct Cylinder : Model {
 			indices.push_back(a);
 		}
 
+		for (size_t t = 0; t + 2 < indices.size(); t += 3) {
+			std::swap(indices[t + 1], indices[t + 2]);
+		}
+
 		mesh.vertex_buffer = new veekay::graphics::Buffer(
 			vertices.size() * sizeof(Vertex), vertices.data(),
 			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
@@ -2824,7 +2828,7 @@ void initialize(VkCommandBuffer cmd) {
 			if (base_model_index < models.size()) {
 				models[base_model_index].transform.position.y = (globe_radius + base_height * 0.4f);
 				models[base_model_index].transform.rotation = {-90.0f, 0.0f, 0.0f};
-				models[base_model_index].transform.scale.z = -1.0f; // инверсия, чтобы виднелась наружная сторона при таком повороте
+				// models[base_model_index].transform.scale.z = -1.0f; // инверсия, чтобы виднелась наружная сторона при таком повороте
 				models[base_model_index].material.emissive_pulse = 0.8f; // радиальная пульсация текстуры
 			}
 		}
@@ -2853,7 +2857,7 @@ void initialize(VkCommandBuffer cmd) {
 			if (support_model_indices[i] < models.size()) {
 				Model& sup = models[support_model_indices[i]];
 				sup.transform.position = bottom + span * 0.5f;
-				sup.transform.scale = {1.0f, 1.0f, -length}; // инвертируем Z, чтобы фронт-фейсы смотрели наружу, как у базы
+				sup.transform.scale = {1.0f, 1.0f, length}; // инвертируем Z, чтобы фронт-фейсы смотрели наружу, как у базы
 				sup.transform.rotation = {pitch, yaw, 0.0f};
 				sup.texture_set = default_texture_set; // переопределим корректным деревом после загрузки текстур
 				sup.material.warp_strength = 0.0f;
@@ -3352,18 +3356,32 @@ void update(double time) {
 	veekay::mat4 dir_shadow_matrix = veekay::mat4::identity();
 	veekay::mat4 spot_shadow_matrix = veekay::mat4::identity();
 	veekay::vec4 shadow_meta = {0.0f, -1.0f, 0.0f, 0.0f};
-	{
-		float scene_span = globe_radius + 15.0f;
-		veekay::vec3 shadow_eye = camera.position - veekay::vec3{
-			lighting_params.directional_light.direction.x,
-			lighting_params.directional_light.direction.y,
-			lighting_params.directional_light.direction.z
-		} * 30.0f;
-		dir_shadow_matrix = make_look_at(shadow_eye, camera.position) *
-		                    make_ortho(-scene_span, scene_span, -scene_span, scene_span, 0.1f, 120.0f);
-		directional_shadow.matrix = dir_shadow_matrix;
-		*(veekay::mat4*)directional_shadow.matrix_buffer->mapped_region = dir_shadow_matrix;
+	// --- Directional shadow (stable, not camera-following) ---
+	float scene_span = globe_radius + 15.0f;
+
+	// Use the sun as the stable center (or just {0,0,0})
+	veekay::vec3 center = {0.0f, 0.0f, 0.0f};
+	if (sun_model_index < models.size()) {
+		center = models[sun_model_index].transform.position;
 	}
+
+	veekay::vec3 light_dir = veekay::vec3{
+		lighting_params.directional_light.direction.x,
+		lighting_params.directional_light.direction.y,
+		lighting_params.directional_light.direction.z
+	};
+	light_dir = veekay::vec3::normalized(light_dir);
+
+	// Same offset, but from the *scene center*, not the camera
+	veekay::vec3 shadow_eye = center - light_dir * 30.0f;
+
+	dir_shadow_matrix =
+		make_look_at(shadow_eye, center) *
+		make_ortho(-scene_span, scene_span, -scene_span, scene_span, 0.1f, 120.0f);
+
+	directional_shadow.matrix = dir_shadow_matrix;
+	*(veekay::mat4*)directional_shadow.matrix_buffer->mapped_region = dir_shadow_matrix;
+
 
 	int selected_spot = -1;
 	float best_score = -1e9f;
