@@ -219,26 +219,26 @@ Material MarsMat = {
 
 Material JupiterMat = {
 	.albedo_color = veekay::vec3{0.9f, 0.7f, 0.5f},
-	.specular_color = veekay::vec3{0.5f, 0.4f, 0.3f},
-	.shininess = 96.0f
+	.specular_color = veekay::vec3{0.24f, 0.2f, 0.16f},
+	.shininess = 24.0f
 };
 
 Material SaturnMat = {
 	.albedo_color = veekay::vec3{0.9f, 0.8f, 0.6f},
-	.specular_color = veekay::vec3{0.5f, 0.4f, 0.2f},
-	.shininess = 96.0f
+	.specular_color = veekay::vec3{0.24f, 0.2f, 0.14f},
+	.shininess = 22.0f
 };
 
 Material UranusMat = {
 	.albedo_color = veekay::vec3{1.0f, 1.0f, 1.0f},
-	.specular_color = veekay::vec3{0.3f, 0.4f, 0.4f},
-	.shininess = 96.0f
+	.specular_color = veekay::vec3{0.16f, 0.2f, 0.22f},
+	.shininess = 18.0f
 };
 
 Material NeptuneMat = {
 	.albedo_color = veekay::vec3{1.0f, 1.0f, 1.0f},
-	.specular_color = veekay::vec3{0.2f, 0.3f, 0.6f},
-	.shininess = 96.0f
+	.specular_color = veekay::vec3{0.14f, 0.2f, 0.36f},
+	.shininess = 18.0f
 };
 
 Material MoonMat = {
@@ -2911,7 +2911,7 @@ void initialize(VkCommandBuffer cmd) {
 		set_tex(uranus_idx, "textures/2k_uranus.jpg");
 		set_tex(neptune_idx, "textures/2k_neptune.jpg");
 		if (base_model_index < models.size()) {
-			set_tex(base_model_index, "textures/rosewood/textures/rosewood_veneer1_diff_2k.jpg", std::string(), std::string(), 0.25f);
+			set_tex(base_model_index, "textures/rosewood/textures/rosewood_veneer1_diff_2k.jpg", std::string(), std::string(), 0.0f);
 			size_t base_tex = models[base_model_index].texture_set;
 			for (int i = 0; i < 4; ++i) {
 				if (support_model_indices[i] < models.size()) {
@@ -2991,10 +2991,14 @@ void update(double time) {
 	static bool cinematic_orbit = true;
 	static float cam_orbit_radius = 8.0f;
 	static float cam_orbit_height = -5.5f;
-	static float cam_orbit_speed = 0.002f;   // radians/sec feel (not degrees)
+	static float cam_orbit_speed = 0.02f;   // radians/sec feel (not degrees)
 	static float cam_smoothness = 10.0f;    // 6..14 nice
 	static float cam_angle = 0.0f;
 	static int last_target = -1;
+	static bool colorful_lights = false;
+	static std::array<veekay::vec4, 8> saved_spotlight_colors{};
+	static std::array<float, 8> saved_spotlight_intensity{};
+	static bool saved_spotlights_valid = false;
 
 
 	// Готовим цвет Солнца без множителя, чтобы в UI редактировать базовое значение
@@ -3007,16 +3011,30 @@ void update(double time) {
 		spotlights[i].color.w = 0.0f;
 	}
 
+	std::vector<size_t> lookat_targets;
+	lookat_targets.reserve(models.size());
+	for (size_t i = 0; i < models.size(); ++i) {
+		if (models[i].title != "Star") {
+			lookat_targets.push_back(i);
+		}
+	}
+	auto ensure_valid_lookat_target = [&](bool update_target) -> bool {
+		if (models.empty() || lookat_targets.empty()) return false;
+		selectedModelIndex = std::clamp(selectedModelIndex, 0, int(models.size()) - 1);
+		bool valid = std::find(lookat_targets.begin(), lookat_targets.end(), static_cast<size_t>(selectedModelIndex)) != lookat_targets.end();
+		if (!valid) {
+			selectedModelIndex = static_cast<int>(lookat_targets.front());
+			if (update_target) {
+				camera.target_position = models[selectedModelIndex].transform.position;
+			}
+		}
+		return true;
+	};
+
 	ImGui::Begin("Controls:");
 	ImGui::DragFloat3("Camera pos", reinterpret_cast<float *>(&camera.position));
 	ImGui::DragFloat3("Camera rot", reinterpret_cast<float *>(&camera.rotation));
 	ImGui::InputFloat3("Look-at target", reinterpret_cast<float *>(&camera.target_position));
-	ImGui::Checkbox("Follow selected target", &follow_selected_target);
-	ImGui::Checkbox("Cinematic orbit", &cinematic_orbit);
-	ImGui::SliderFloat("Orbit radius", &cam_orbit_radius, 5.0f, 120.0f);
-	ImGui::SliderFloat("Orbit height", &cam_orbit_height, -30.0f, 30.0f);
-	ImGui::SliderFloat("Orbit speed", &cam_orbit_speed, -0.2f, 0.2f);
-	ImGui::SliderFloat("Camera smoothness", &cam_smoothness, 0.0f, 20.0f);
 
 
 	bool previousLookAt = camera.LookAt;
@@ -3049,27 +3067,38 @@ void update(double time) {
 				camera.rotation = lookat_state.rotation;
 				camera.target_position = lookat_state.target;
 			} else if (!models.empty()) {
-				size_t clamped_index = std::min<size_t>(selectedModelIndex, models.size() - 1);
-				camera.target_position = models[clamped_index].transform.position;
+				if (!ensure_valid_lookat_target(true)) {
+					size_t clamped_index = std::min<size_t>(selectedModelIndex, models.size() - 1);
+					camera.target_position = models[clamped_index].transform.position;
+				}
 			}
 		}
 	}
 
-	if (camera.LookAt && !models.empty()) {
-        ImGui::Text("Target:");
-        if (ImGui::BeginCombo("##CameraTarget", ("Model " + models[selectedModelIndex].title).c_str())) {
-            for (size_t i = 0; i < models.size(); ++i) {
-                bool isSelected = (selectedModelIndex == (int)i);
-                if (ImGui::Selectable(("Model " + models[i].title).c_str(), isSelected)) {
-                    selectedModelIndex = (int)i;
+	bool has_targets = ensure_valid_lookat_target(camera.LookAt);
+	if (camera.LookAt && has_targets) {
+		ImGui::Checkbox("Follow selected target", &follow_selected_target);
+		ImGui::Checkbox("Cinematic orbit", &cinematic_orbit);
+		ImGui::SliderFloat("Orbit radius", &cam_orbit_radius, 5.0f, 120.0f);
+		ImGui::SliderFloat("Orbit height", &cam_orbit_height, -30.0f, 30.0f);
+		ImGui::SliderFloat("Orbit speed", &cam_orbit_speed, -0.2f, 0.2f);
+		ImGui::SliderFloat("Camera smoothness", &cam_smoothness, 0.0f, 20.0f);
+
+		ImGui::Text("Target:");
+		const Model& selected_model = models[selectedModelIndex];
+		if (ImGui::BeginCombo("##CameraTarget", ("Model " + selected_model.title).c_str())) {
+			for (size_t idx : lookat_targets) {
+				bool isSelected = (selectedModelIndex == (int)idx);
+				if (ImGui::Selectable(("Model " + models[idx].title).c_str(), isSelected)) {
+					selectedModelIndex = (int)idx;
 					camera.target_position = models[selectedModelIndex].transform.position;
-                }
-                if (isSelected) {
+				}
+				if (isSelected) {
 					ImGui::SetItemDefaultFocus();
 				}
-            }
-            ImGui::EndCombo();
-        }
+			}
+			ImGui::EndCombo();
+		}
 	}
 
 	ImGui::SliderFloat("Orbit speedup", &orbit_speedup, 0.1f, 5.0f, "%.1f");
@@ -3107,11 +3136,31 @@ void update(double time) {
 	}
 
 	// Прожекторы
+	auto apply_colorful_palette = [&](uint32_t count) {
+		const std::array<veekay::vec3, 8> palette = {{
+			{1.0f, 0.35f, 0.35f},
+			{1.0f, 0.65f, 0.25f},
+			{0.95f, 0.95f, 0.25f},
+			{0.3f, 0.85f, 0.45f},
+			{0.25f, 0.75f, 1.0f},
+			{0.55f, 0.45f, 1.0f},
+			{0.95f, 0.35f, 0.85f},
+			{0.35f, 0.95f, 0.9f},
+		}};
+		for (uint32_t i = 0; i < count && i < 8; ++i) {
+			spotlight_base_color[i] = veekay::vec4{palette[i].x, palette[i].y, palette[i].z, 0.0f};
+			spotlights[i].color = spotlight_base_color[i];
+			spotlight_intensity[i] = 100.0f;
+		}
+	};
 	ImGui::Text("Spotlights");
+	bool colorful_changed = ImGui::Checkbox("Colorful lights", &colorful_lights);
 	int spot_count_int = int(spotlight_count);
+	bool spot_count_changed = false;
 	if (ImGui::DragInt("Spotlight Count", &spot_count_int, 1.0f, 0, 8)) {
 		uint32_t old_count = spotlight_count;
 		spotlight_count = uint32_t(std::max(0, std::min(8, spot_count_int)));
+		spot_count_changed = (spotlight_count != old_count);
 
 		// Инициализируем новые источники, если количество увеличилось
 		for (uint32_t i = old_count; i < spotlight_count; ++i) {
@@ -3127,6 +3176,24 @@ void update(double time) {
 				0.0f, 0.0f
 			};
 		}
+	}
+	if (colorful_changed && colorful_lights) {
+		for (uint32_t i = 0; i < 8; ++i) {
+			saved_spotlight_colors[i] = spotlight_base_color[i];
+			saved_spotlight_colors[i].w = 0.0f;
+			saved_spotlight_intensity[i] = spotlight_intensity[i];
+		}
+		saved_spotlights_valid = true;
+		apply_colorful_palette(spotlight_count);
+	} else if (colorful_changed && !colorful_lights && saved_spotlights_valid) {
+		for (uint32_t i = 0; i < 8; ++i) {
+			spotlights[i].color = saved_spotlight_colors[i];
+			spotlight_base_color[i] = saved_spotlight_colors[i];
+			spotlight_intensity[i] = saved_spotlight_intensity[i];
+		}
+	}
+	if (colorful_lights && spot_count_changed) {
+		apply_colorful_palette(spotlight_count);
 	}
 	for (uint32_t i = 0; i < spotlight_count && i < 8; i++) {
 		ImGui::PushID(int(i + 8));
@@ -3193,7 +3260,7 @@ void update(double time) {
 
 	// создаем источники первый раз
 	if (!first) {
-		lighting_params.ambient_color = veekay::vec4{0.2f, 0.2f, 0.2f, 0.0f};
+		lighting_params.ambient_color = veekay::vec4{0.0f, 0.0f, 0.0f, 0.0f};
 		
 		// Точечный источник (Солнце)
 			point_light_count = 1;
@@ -3339,10 +3406,9 @@ void update(double time) {
 	for (const auto& orbit : orbits) {
 		if (orbit.model_index >= models.size()) continue;
 
-		if (camera.LookAt && follow_selected_target && !models.empty()) {
-			selectedModelIndex = std::clamp(selectedModelIndex, 0, (int)models.size() - 1);
+		if (camera.LookAt && follow_selected_target && has_targets) {
+			ensure_valid_lookat_target(true);
 
-			// Always track the *current* position (this is the key fix)
 			veekay::vec3 target = models[selectedModelIndex].transform.position;
 			camera.target_position = target;
 
