@@ -1170,7 +1170,7 @@ namespace {
 		PointLight point_lights[8];
 		uint32_t spotlight_count = 1;
 		Spotlight spotlights[8];
-		float orbit_speedup = 2.0f;
+		float orbit_speedup = 1.0f;
 		veekay::vec4 sun_base_color = {2.5f, 2.3f, 1.6f, 0.0f};
 		float sun_intensity = 13.0f;
 		float dir_sun_intensity = 0.2f; // separate control for far directional sun brightness
@@ -2987,6 +2987,15 @@ void update(double time) {
 	prev_time = time;
 	if (dt < 0.0) dt = 0.0;
 	float dt_f = static_cast<float>(dt);
+	static bool follow_selected_target = true;
+	static bool cinematic_orbit = true;
+	static float cam_orbit_radius = 8.0f;
+	static float cam_orbit_height = -5.5f;
+	static float cam_orbit_speed = 0.002f;   // radians/sec feel (not degrees)
+	static float cam_smoothness = 10.0f;    // 6..14 nice
+	static float cam_angle = 0.0f;
+	static int last_target = -1;
+
 
 	// Готовим цвет Солнца без множителя, чтобы в UI редактировать базовое значение
 	if (point_light_count > 0) {
@@ -3002,6 +3011,13 @@ void update(double time) {
 	ImGui::DragFloat3("Camera pos", reinterpret_cast<float *>(&camera.position));
 	ImGui::DragFloat3("Camera rot", reinterpret_cast<float *>(&camera.rotation));
 	ImGui::InputFloat3("Look-at target", reinterpret_cast<float *>(&camera.target_position));
+	ImGui::Checkbox("Follow selected target", &follow_selected_target);
+	ImGui::Checkbox("Cinematic orbit", &cinematic_orbit);
+	ImGui::SliderFloat("Orbit radius", &cam_orbit_radius, 5.0f, 120.0f);
+	ImGui::SliderFloat("Orbit height", &cam_orbit_height, -30.0f, 30.0f);
+	ImGui::SliderFloat("Orbit speed", &cam_orbit_speed, -0.2f, 0.2f);
+	ImGui::SliderFloat("Camera smoothness", &cam_smoothness, 0.0f, 20.0f);
+
 
 	bool previousLookAt = camera.LookAt;
 	// 2.1 Переключение режимов камеры: сохраняем/восстанавливаем положение и цель при переходе LookAt <-> свободная камера
@@ -3056,7 +3072,7 @@ void update(double time) {
         }
 	}
 
-	ImGui::SliderFloat("Orbit speedup", &orbit_speedup, 0.1f, 10.0f, "%.1f");
+	ImGui::SliderFloat("Orbit speedup", &orbit_speedup, 0.1f, 5.0f, "%.1f");
 	// 0.5 Регулировка яркости Солнца без изменения подобранного цвета
 	ImGui::SliderFloat("Sun intensity", &sun_intensity, 0.1f, 20.0f, "%.1f");
 	ImGui::SliderFloat("Far sun intensity", &dir_sun_intensity, 0.0f, 2.0f, "%.2f");
@@ -3322,6 +3338,35 @@ void update(double time) {
 	double sim_years = time * (orbit_speedup * 0.1);
 	for (const auto& orbit : orbits) {
 		if (orbit.model_index >= models.size()) continue;
+
+		if (camera.LookAt && follow_selected_target && !models.empty()) {
+			selectedModelIndex = std::clamp(selectedModelIndex, 0, (int)models.size() - 1);
+
+			// Always track the *current* position (this is the key fix)
+			veekay::vec3 target = models[selectedModelIndex].transform.position;
+			camera.target_position = target;
+
+			if (cinematic_orbit) {
+				// optional: reset orbit angle when switching targets
+				if (selectedModelIndex != last_target) {
+					cam_angle = 0.0f;
+					last_target = selectedModelIndex;
+				}
+
+				cam_angle += cam_orbit_speed * dt_f;
+
+				veekay::vec3 desired_eye = target + veekay::vec3{
+					std::cos(cam_angle) * cam_orbit_radius,
+					cam_orbit_height,
+					std::sin(cam_angle) * cam_orbit_radius
+				};
+
+				// exponential smoothing (no jitter)
+				float sharp = std::max(0.001f, cam_smoothness);
+				float t = 1.0f - std::exp(-sharp * dt_f);
+				camera.position = camera.position + (desired_eye - camera.position) * t;
+			}
+		}
 
 		veekay::vec3 center = {0.0f, 0.0f, 0.0f};
 		if (orbit.parent_index != SIZE_MAX && orbit.parent_index < models.size()) {
