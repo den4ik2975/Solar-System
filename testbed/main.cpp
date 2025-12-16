@@ -1060,8 +1060,8 @@ veekay::mat4 make_look_at(veekay::vec3 eye, veekay::vec3 target, veekay::vec3 up
 		}
 	}
 
-	veekay::vec3 right = veekay::vec3::normalized(veekay::vec3::cross(forward, up));
-	up = veekay::vec3::normalized(veekay::vec3::cross(right, forward));
+	veekay::vec3 right = veekay::vec3::normalized(veekay::vec3::cross(up, forward));
+	up = veekay::vec3::normalized(veekay::vec3::cross(forward, right));
 
 	const veekay::mat4 basis = {
 		right.x, up.x, -forward.x, 0,
@@ -1642,6 +1642,7 @@ void record_shadow_pass(ShadowMap& shadow, VkCommandBuffer cmd, uint32_t model_c
 	VkBuffer current_index_buffer = VK_NULL_HANDLE;
 
 	for (size_t i = 0; i < model_count; ++i) {
+		if (i == glass_model_index) continue;
 		const Model& model = models[i];
 		const Mesh& mesh = model.mesh;
 
@@ -2105,6 +2106,7 @@ void record_point_shadow_pass(PointShadow& shadow, VkCommandBuffer cmd, uint32_t
 
 		for (size_t i = 0; i < model_count; ++i) {
 			if (static_cast<int>(i) == skip_model) continue;
+			if (i == glass_model_index) continue;
 			const Model& model = models[i];
 			const Mesh& mesh = model.mesh;
 
@@ -2827,19 +2829,6 @@ void initialize(VkCommandBuffer cmd) {
 			}
 		}
 
-		// Вращающийся вал от базы к Солнцу (декоративный)
-		{
-			float base_y = models[base_model_index].transform.position.y;
-			float shaft_len = std::max(0.5f, base_y - 0.5f);
-			size_t idx_before = models.size();
-			Cube({0.0f, 0.0f, 0.0f}, BaseMat, "Shaft", {0.25f, shaft_len, 0.25f});
-			shaft_model_index = idx_before;
-			if (shaft_model_index < models.size()) {
-				models[shaft_model_index].transform.position = {0.0f, base_y * 0.5f, 0.0f};
-				size_t metal_tex = create_texture_set_from_paths(cmd, "textures/metal/2K-metal_1-diffuse.jpg", "textures/metal/2K-metal_1-specular.jpg");
-				models[shaft_model_index].texture_set = metal_tex;
-			}
-		}
 
 		// Наклонные опоры к стеклу
 		for (int i = 0; i < 4; ++i) {
