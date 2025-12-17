@@ -35,9 +35,9 @@ layout (binding = 0, std140) uniform SceneUniforms {
 	vec4 camera_position;   // 2.5 Позиция камеры в мировых координатах
 	LightingData lighting;  // 2.5 Фоновый свет и направленный источник
 	vec4 time;              // x = time
-	mat4 shadow_view_projection_dir;
-	mat4 shadow_view_projection_spot;
-	vec4 shadow_meta;       // x: spot shadow enabled (0/1), y: shadowed spot index, z: point far, w: point near
+	mat4 shadow_view_projection_dir; // 4. Матрица для проекции позиции фрагмента в space карты тени направленного света
+	mat4 shadow_view_projection_spot; // 4. Матрица для активного прожектора (если выбран)
+	vec4 shadow_meta;       // 4. x: включена ли прожекторная тень, y: индекс прожектора, z: far для point shadow, w: near для point shadow
 } scene;
 
 layout (binding = 1, std140) uniform ModelUniforms {
@@ -72,6 +72,7 @@ layout (set = 1, binding = 1) uniform sampler2D tex_specular;
 layout (set = 1, binding = 2) uniform sampler2D tex_emissive;
 
 float sampleShadow(sampler2DShadow shadow_tex, vec4 shadow_position) {
+	// 4. PCF-like выборка 2D shadow map: делим на w, проверяем, что в пределах [0,1], применяем небольшой bias и сравнение sampler'ом
 	vec3 coord = shadow_position.xyz / shadow_position.w;
 	if (coord.z <= 0.0 || coord.z >= 1.0) {
 		return 1.0;
@@ -91,6 +92,8 @@ float projectDepth(float z_eye, float near_plane, float far_plane) {
 }
 
 float samplePointShadow(vec3 to_light, float near_plane, float far_plane) {
+	// 4. Сэмпл кубической карты тени для точечного источника: выбираем лицо куба по направлению, проектируем глубину в [0,1] (тот же near/far, что в CPU),
+	//     добавляем bias и используем сравнивающий samplerCubeShadow
 	float dist = length(to_light);
 	if (far_plane <= near_plane || dist <= 0.0001) return 1.0;
 	vec3 dir = normalize(to_light);
@@ -135,7 +138,8 @@ void main() {
 	}
 	vec2 uv = f_uv;
 	if (warp > 0.0) {
-		// 3.6 Нетривиальная анимация UV (дрейф+лёгкий вихрь) для выбранных материалов
+		// 3.6 Нетривиальная анимация UV (дрейф+лёгкий вихрь) для выбранных материалов: смещаем UV во времени и закручиваем вокруг центра,
+		//     усиливая в центре (core) и добавляя радиальные волны — эффект используется для "живых" текстур (Солнце/база)
 		float t = scene.time.x;
 		uv += vec2(t * 0.02, t * 0.01); // gentle drift
 		vec2 centered = uv - vec2(0.5);
@@ -183,6 +187,7 @@ void main() {
 	// 2.8 Фоновая составляющая
 	vec3 ambient = scene.lighting.ambient_color.xyz * k_a + k_a * thin_boost;
 	vec3 result = ambient;
+	// 4. Берём факторы тени: dir/spot через sampler2DShadow (позиции передал вершинник), point через samplerCubeShadow с near/far из shadow_meta
 	float shadow_dir = sampleShadow(shadow_texture_dir, f_shadow_dir);
 	float shadow_spot = sampleShadow(shadow_texture_spot, f_shadow_spot);
 	int spot_shadow_enabled = int(scene.shadow_meta.x + 0.5);
@@ -231,6 +236,7 @@ void main() {
 			float NdotH = max(dot(N, H), 0.0);
 			vec3 specular = k_s * point_lights.lights[i].color.xyz * pow(NdotH, shininess) * attenuation;
 			
+			// 4. Point shadow: слот 0 (Солнце) умножаем на выборку кубической карты, остальные оставляем без тени
 			float shadow_term = (i == 0) ? shadow_point : 1.0;
 			result += (diffuse + specular) * shadow_term;
 		}
@@ -268,6 +274,7 @@ void main() {
 			float NdotH = max(dot(N, H), 0.0);
 			vec3 specular = k_s * spotlights.lights[i].color.xyz * pow(NdotH, shininess) * attenuation;
 			
+			// 4. Spot shadow: применяем shadow map только к выбранному на CPU прожектору (shadow_meta), остальные не затеняем
 			float spot_shadow_term = 1.0;
 			if ((spot_shadow_enabled != 0) && shadowed_spot_index == int(i)) {
 				spot_shadow_term = shadow_spot;

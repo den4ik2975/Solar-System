@@ -319,7 +319,7 @@ struct Camera {
 	// NOTE: View matrix of camera (inverse of a transform)
 	veekay::mat4 view() const;
 
-	bool LookAt = true;
+	bool LookAt = false;
 	veekay::vec3 target_position = {0, 0, 0};
 	veekay::mat4 lookAt_view() const;
 
@@ -334,7 +334,8 @@ struct CameraState {
 };
 
 struct Orbit {
-	// 0.3 Эллиптическая орбита: хранит полуоси, поворот, угловую скорость и родителя для привязки (например, Луна к Земле)
+	// 0.3 Эллиптическая орбита: держим параметры Kepler-ellipse (a/b, угол поворота орбиты, угловая скорость и фазу)
+	//     + parent_index для вложенных систем (Луна привязана к Земле). Расчет позиции дальше делаем в update, вручную считая cos/sin и поворот ellipse.
 	size_t model_index;
 	size_t parent_index; // SIZE_MAX = нет родителя
 	float a;
@@ -515,7 +516,8 @@ struct Cube : Model {
 };
 
 struct Sphere : Model {
-	// 0.1 Процедурная генерация сферы: вершины строятся по широте/долготе, нормали совпадают с направлением радиуса
+	// 0.1 Процедурная сфера: параметризуем широту/долготу (stacks/slices), генерируем вершины по sin/cos,
+	//     нормали равны радиус-вектору (идеально для сферического освещения), UV берём как (u=vдолгота, v=широта)
 	Sphere(veekay::vec3 position, float radius, uint32_t stacks, uint32_t slices, Material material, std::string title = "Sphere", veekay::vec3 scale = {1.f,1.f,1.f})
 	{
 		std::vector<Vertex> vertices;
@@ -780,7 +782,8 @@ struct Cylinder : Model {
 };
 
 struct Ring : Model {
-	// 0.2 Плоское кольцо (Сатурн): внутренний/внешний радиусы + корректный порядок индексов для обзора сверху
+	// 0.2 Плоское кольцо (Сатурн): строим геометрию по окружностям inner/outer, нормаль строго +Y,
+	//     индексы проставляем так, чтобы смотреть сверху на лицевую сторону (clockwise фронт), подходит для альфа-текстуры кольца
 	Ring(veekay::vec3 position, float inner_radius, float outer_radius, uint32_t segments, Material material, std::string title = "Ring")
 	{
 		std::vector<Vertex> vertices;
@@ -1020,7 +1023,8 @@ size_t create_texture_set(VkDevice device, veekay::graphics::Texture* albedo, ve
 		vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);
 	}
 
-	// 3.3 Формируем отдельный набор дескрипторов с тремя текстурами материала
+	// 3.3 Собираем набор дескрипторов материала: albedo/spec/emissive как три combined image sampler,
+	//     чтобы в шейдере получать полный PBR-набор; пишем их в общий вектор texture_sets для привязки при отрисовке моделей
 	texture_sets.push_back(set);
 	return texture_sets.size() - 1;
 }
@@ -1105,7 +1109,9 @@ veekay::mat4 Transform::matrix() const {
 }
 
 veekay::mat4 Camera::view() const {
-    // 2.4 Матрица вида: инверсия трансформа камеры (T^-1 * R^-1), чтобы объекты двигались относительно наблюдателя
+    // 2.4 Матрица вида: вычисляем T^-1 и R^-1 от камеры вручную (минус углы, минус позиция),
+	//     чтобы получить матрицу, которая переводит мировые координаты в пространство камеры.
+	//     Умножаем в порядке veekay (translation * rotation), чтобы движок читал правильно.
     veekay::mat4 rot_x = veekay::mat4::rotation(veekay::vec3{1.0f, 0.0f, 0.0f}, -toRadians(rotation.x));
     veekay::mat4 rot_y = veekay::mat4::rotation(veekay::vec3{0.0f, 1.0f, 0.0f}, -toRadians(rotation.y));
     veekay::mat4 rot_z = veekay::mat4::rotation(veekay::vec3{0.0f, 0.0f, 1.0f}, -toRadians(rotation.z));
@@ -1154,7 +1160,8 @@ veekay::mat4 Camera::lookAt_view() const{
 }
 
 veekay::mat4 Camera::view_projection(float aspect_ratio) const {
-	// 2.4 Композиция вида/проекции: соответствуем API veekay (вид слева, проекция справа)
+	// 2.4 Композиция вида/проекции: делаем perspective proj с заданным fov/aspect/near/far и слева умножаем view/LookAt view.
+	//     Важно: порядок умножения соответствует ожиданиям veekay (view * proj), поэтому возвращаем именно так.
 	auto projection = veekay::mat4::projection(fov, aspect_ratio, near_plane, far_plane);
 
 	if(LookAt == true)
@@ -1598,6 +1605,7 @@ void transition_shadow_layout(ShadowMap& shadow, VkCommandBuffer cmd, VkImageLay
 }
 
 void record_shadow_pass(ShadowMap& shadow, VkCommandBuffer cmd, uint32_t model_count, uint32_t model_stride) {
+	// 4.4 Прогон depth-only для направленного/прожекторного источника: переводим layout под запись, рендерим всё (кроме стекла) в карту глубины через vkCmdBeginRenderingKHR, ставим depth bias для борьбы с acne
 	transition_shadow_layout(shadow, cmd,
 	                         VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
 	                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
@@ -2049,6 +2057,7 @@ void transition_point_shadow(PointShadow& shadow, VkCommandBuffer cmd, VkImageLa
 }
 
 void record_point_shadow_pass(PointShadow& shadow, VkCommandBuffer cmd, uint32_t model_count, uint32_t model_stride, veekay::vec3 light_pos, int skip_model) {
+	// 4.5 Кубический shadow-pass для точечного света: по всем 6 лицам куба строим view/proj, пишем глубину в слои cube-map через dynamic rendering, применяем depth bias и пропускаем стекло/сам источник
 	transition_point_shadow(shadow, cmd,
 	                        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
 	                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
@@ -2351,7 +2360,8 @@ void initialize(VkCommandBuffer cmd) {
 			}
 		}
 
-		// NOTE: Descriptor set layout specification
+		// 3.1 Макет дескрипторов сцены/теней/текстур: 0 — Scene UBO, 1 — Model UBO dynamic, 2 — SSBO точечных, 3 — SSBO прожекторов,
+		//     4/5/6 — три shadow map (dir/spot/point). Это основной сет, который потом биндим вместе с материалами.
 		{
 			VkDescriptorSetLayoutBinding bindings[] = {
 				{
@@ -2547,11 +2557,13 @@ void initialize(VkCommandBuffer cmd) {
 		VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
 	directional_shadow.size = 2048;
+	// 4.1 Создаем depth-ресурсы/пайплайн для тени направленного света через dynamic rendering (depth-only, compare sampler, bias) — это главный источник теней на всю сцену
 	if (!create_shadow_resources(directional_shadow, cmd, descriptor_pool, model_uniforms_buffer, "D:/Denis/Documents/Lab2/Lab2/shaders/shadow.vert.spv")) {
 		veekay::app.running = false;
 		return;
 	}
 	spot_shadow.size = 1024;
+	// 4.2 Отдельная карта теней для выбранного прожектора: те же настройки depth-only, затем выбор лучшего прожектора в update и обновление матрицы вида/проекции
 	if (!create_shadow_resources(spot_shadow, cmd, descriptor_pool, model_uniforms_buffer, "D:/Denis/Documents/Lab2/Lab2/shaders/shadow.vert.spv")) {
 		veekay::app.running = false;
 		return;
@@ -2559,6 +2571,7 @@ void initialize(VkCommandBuffer cmd) {
 	sun_point_shadow.size = 1024;
 	sun_point_shadow.near_plane = 0.1f;
 	sun_point_shadow.far_plane = 120.0f;
+	// 4.3 Кубическая карта теней для точечного источника (Солнце): создаем 6-фейсный depth image + sampler с compare, отдельный пайплайн под cube-рендер
 	if (!create_point_shadow_resources(sun_point_shadow, cmd, descriptor_pool, model_uniforms_buffer, "D:/Denis/Documents/Lab2/Lab2/shaders/shadow.vert.spv")) {
 		veekay::app.running = false;
 		return;
@@ -2566,7 +2579,8 @@ void initialize(VkCommandBuffer cmd) {
 
 	// NOTE: Textures and samplers
 	{
-		// 3.2 Создаем сэмплер (линейная фильтрация, мипы, repeat) для всех материалов
+		// 3.2 Общий сэмплер материалов: линейный фильтр + мипы и repeat по всем осям,
+		//     чтобы albedo/spec/emissive текстуры умели плавно масштабироваться и тайлиться; этот сэмплер шэрится всеми TextureSet
 		VkSamplerCreateInfo info{};
 		info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
 		info.magFilter = VK_FILTER_LINEAR;
@@ -2713,8 +2727,9 @@ void initialize(VkCommandBuffer cmd) {
 		                       write_infos, 0, nullptr);
 	}
 
-		// 0.4 Сцена солнечной системы: планеты/кольцо, с масштабированием расстояний под окно
-		//    Используем эксцентриситет/период/угол из planets.md, полуось b = a*sqrt(1-e^2)
+		// 0.4 Сцена солнечной системы: собираем набор планет/кольцо, ужимаем расстояния под витрину,
+		//     орбитальные параметры (эксцентриситет, период, наклон) берём из planets.md и вычисляем полуось b = a*sqrt(1-e^2).
+		//     Здесь создаём геометрию/материалы и регистрируем орбиты, чтобы потом в update двигать тела по Кеплеру.
 		// Plane({0.0f, 0.0f, 0.0f}, Standart, "Ecliptic");
 		star_spawner.radius = globe_radius - 1.0f;
 
@@ -2788,7 +2803,8 @@ void initialize(VkCommandBuffer cmd) {
 	add_orbit(neptune_idx, SIZE_MAX, base_distance * 13.0f, 0.009f, 131.0f, 164.79f);
 	spin_targets.push_back({neptune_idx, 20.0f});
 
-		// 0.1 Звёзды: 30 эмиссивных сфер на небесной сфере, перераспавн при окончании жизни
+		// 0.1 Звёзды: генерим ~50 мелких эмиссивных сфер на небесной сфере радиуса globe_radius-1, каждая имеет базовый цвет и таймер жизни;
+		//     при окончании жизни звезда респавнится в новом случайном направлении с новым цветом, так получаем мерцание и перемещение точек
 		const int star_count = 50;
 		for (int i = 0; i < star_count; ++i) {
 			size_t idx_before = models.size();
@@ -2801,7 +2817,8 @@ void initialize(VkCommandBuffer cmd) {
 			stars.push_back(s);
 		}
 
-		// 0.1 Кометы: до 3 штук, вытянутая модель + точечный свет в голове
+		// 0.1 Кометы: до 3 штук, каждая — вытянутая эмиссивная сфера (хвост) + привязанный точечный источник в голове;
+		//     траектория выбирается на сфере (CometSpawner), хвост растягивается по длине пути, fade in/out управляет появлением/затуханием
 		const int comet_max = 3;
 		for (int i = 0; i < comet_max; ++i) {
 			const float comet_radius = 0.1f;
@@ -2887,8 +2904,9 @@ void initialize(VkCommandBuffer cmd) {
 			}
 		}
 
-		// 3.4 Привязываем уникальные наборы текстур к моделям (albedo/spec/emissive)
-		auto set_tex = [&](size_t idx, const std::string& albedo, const std::string& spec = std::string(), const std::string& emissive = std::string(), float warp = 0.0f) {
+			// 3.4 Привязываем уникальные наборы текстур к каждой модели: создаём TextureSet из путей (albedo/spec/emissive),
+			//     сохраняем его индекс в модели и опционально задаём warp_strength (для анимированных UV материалов вроде Солнца/базы)
+			auto set_tex = [&](size_t idx, const std::string& albedo, const std::string& spec = std::string(), const std::string& emissive = std::string(), float warp = 0.0f) {
 			if (idx >= models.size()) return;
 			size_t tex_idx = create_texture_set_from_paths(cmd, albedo, spec, emissive);
 			models[idx].texture_set = tex_idx;
@@ -2980,7 +2998,8 @@ void shutdown() {
 void update(double time) {
     static int selectedModelIndex = 0;
 	static bool first = false;
-	// 0.7 Дельта по времени между кадрами для анимации звёзд/комет и плавных респавнов
+	// 0.7 Дельта времени: считаем dt между кадрами (пропуская первый), потом используем его везде — для плавной анимации звёзд/комет,
+	//     интерполяции камеры и орбит. Если время "отмоталось", зажимаем в 0, чтобы не сломать физику.
 	static double prev_time = time;
 	double dt = first ? (time - prev_time) : 0.0;
 	prev_time = time;
@@ -2998,6 +3017,8 @@ void update(double time) {
 	static std::array<veekay::vec4, 8> saved_spotlight_colors{};
 	static std::array<float, 8> saved_spotlight_intensity{};
 	static bool saved_spotlights_valid = false;
+	static float saved_sun_intensity = 10.0f;
+	static float saved_dir_sun_intensity = 0.2f;
 
 
 	// Готовим цвет Солнца без множителя, чтобы в UI редактировать базовое значение
@@ -3037,7 +3058,9 @@ void update(double time) {
 
 
 	bool previousLookAt = camera.LookAt;
-	// 2.1 Переключение режимов камеры: сохраняем/восстанавливаем положение и цель при переходе LookAt <-> свободная камера
+	// 2.1 Переключение режимов камеры: при входе в LookAt запоминаем свободную камеру (transform_state),
+	//     при выходе — сохраняем текущее состояние look-at (lookat_state) и откатываемся на свободный полёт.
+	//     Так пользователь не теряет позицию при переключении туда-сюда.
 	ImGui::Checkbox("Look-at mode", &camera.LookAt);
 	if (previousLookAt != camera.LookAt) {
 		if (previousLookAt) {
@@ -3101,7 +3124,7 @@ void update(double time) {
 	}
 
 	ImGui::SliderFloat("Orbit speedup", &orbit_speedup, 0.1f, 5.0f, "%.1f");
-	// 0.5 Регулировка яркости Солнца без изменения подобранного цвета
+	// 0.5 Регулировка яркости Солнца: UI оставляет базовый цвет (sun_base_color) нетронутым, а slider умножает его позже — можно менять энергию источника, не портя подобранный оттенок
 	ImGui::SliderFloat("Sun intensity", &sun_intensity, 0.1f, 20.0f, "%.1f");
 	ImGui::SliderFloat("Far sun intensity", &dir_sun_intensity, 0.0f, 2.0f, "%.2f");
 
@@ -3170,26 +3193,34 @@ void update(double time) {
 			spotlight_base_color[i] = spotlights[i].color;
 			spotlight_intensity[i] = 1.0f;
 			spotlights[i].cone_angles = veekay::vec4{
-				std::cos(toRadians(20.0f)),  // inner
-				std::cos(toRadians(25.0f)),  // outer
+				std::cos(toRadians(70.0f)),  // inner
+				std::cos(toRadians(90.0f)),  // outer
 				0.0f, 0.0f
 			};
 		}
 	}
 	if (colorful_changed && colorful_lights) {
+		// Сохраняем текущее состояние света/интенсивностей и солнца, затем включаем палитру и глушим солнце
 		for (uint32_t i = 0; i < 8; ++i) {
 			saved_spotlight_colors[i] = spotlight_base_color[i];
 			saved_spotlight_colors[i].w = 0.0f;
 			saved_spotlight_intensity[i] = spotlight_intensity[i];
 		}
+		saved_sun_intensity = sun_intensity;
+		saved_dir_sun_intensity = dir_sun_intensity;
 		saved_spotlights_valid = true;
 		apply_colorful_palette(spotlight_count);
+		sun_intensity = 0.0f;
+		dir_sun_intensity = 0.0f;
 	} else if (colorful_changed && !colorful_lights && saved_spotlights_valid) {
+		// Восстанавливаем старые цвета/интенсивности и интенсивности солнца
 		for (uint32_t i = 0; i < 8; ++i) {
 			spotlights[i].color = saved_spotlight_colors[i];
 			spotlight_base_color[i] = saved_spotlight_colors[i];
 			spotlight_intensity[i] = saved_spotlight_intensity[i];
 		}
+		sun_intensity = saved_sun_intensity;
+		dir_sun_intensity = saved_dir_sun_intensity;
 	}
 	if (colorful_lights && spot_count_changed) {
 		apply_colorful_palette(spotlight_count);
@@ -3200,7 +3231,7 @@ void update(double time) {
 		ImGui::DragFloat3("Position", &spotlights[i].position.x, 0.1f);
 		ImGui::DragFloat3("Direction", &spotlights[i].direction.x, 0.01f, -1.0f, 1.0f);
 		ImGui::ColorEdit3("Color", &spotlights[i].color.x);
-		// 0.5 Регулировка яркости прожектора отдельным множителем
+		// 0.5 Отдельный множитель яркости прожектора: позволяет крутить энергию луча без изменения подобранного цвета spotlights[i].color
 		ImGui::SliderFloat("Intensity", &spotlight_intensity[i], 0.0f, 100.0f);
 		float inner_deg = std::acos(spotlights[i].cone_angles.x) * 180.0f / float(M_PI);
 		float outer_deg = std::acos(spotlights[i].cone_angles.y) * 180.0f / float(M_PI);
@@ -3214,7 +3245,8 @@ void update(double time) {
 	}
 	ImGui::End();
 	
-	// 2.2 Управление камерой с клавиатуры/мыши вне UI окна
+	// 2.2 Управление камерой с клавиатуры/мыши вне UI окна: если мышь не над ImGui, крутим free-flight WASDQZ и look delta,
+	//     для свободной камеры меняем pitch/yaw по движению мыши, перемещаем по осям right/up/front. В режиме LookAt вращение мышью отключено.
 	for (uint32_t i = 0; i < spotlight_count && i < 8; ++i) {
 		spotlight_base_color[i] = spotlights[i].color;
 		spotlight_base_color[i].w = 0.0f;
@@ -3266,7 +3298,8 @@ void update(double time) {
 			point_lights[0].position = veekay::vec4{0.0f, 0.0f, 0.0f, 0.0f};
 			point_lights[0].color = sun_base_color; // Цвет задаётся из UI
 			
-			// 2.3 Добавленный тип источника — прожекторы, подсвечивающие сцену сверху/снизу (8 штук)
+			// 2.3 Добавленный тип источника — прожекторы: по кольцу над/под сценой ставим 8 штук,
+			//     сразу прописываем позицию/нормализованное направление и одинаковые cone_angles, чтобы дать равномерную подсветку витрины
 			spotlight_count = 8;
 			float inner_angle_rad = toRadians(25.0f);
 			float outer_angle_rad = toRadians(40.0f);
@@ -3327,7 +3360,7 @@ void update(double time) {
 
 	// Apply sun intensity to the first point light color but keep user-editable base
 	if (point_light_count > 0) {
-		// 0.5 Яркость Солнца: умножаем пользовательский цвет на слайдер интенсивности
+		// 0.5 Яркость Солнца: базовый цвет редактируем в UI, а здесь умножаем на выбранную интенсивность, чтобы управлять мощностью источника, не трогая оттенок
 		point_lights[0].color = veekay::vec4{
 			sun_base_color.x * sun_intensity,
 			sun_base_color.y * sun_intensity,
@@ -3344,7 +3377,8 @@ void update(double time) {
 		sun_base_color.z * dir_intensity,
 		0.0f};
 
-	// 0.7 Анимация звёзд: плавно мигают и респавнятся в новом месте после окончания жизни
+	// 0.7 Анимация звёзд: каждую рампу времени копим в star.time, после lifetime — респавним в новой точке небесной сферы;
+	//     яркость пульсирует по синусу (0..1..0), цвет берём из base_color, чтобы получить мягкое мерцание
 	for (auto& star : stars) {
 		star.time += dt_f;
 		if (star.time >= star.lifetime) {
@@ -3356,7 +3390,7 @@ void update(double time) {
 		models[star.model_index].material.albedo_color = star.base_color * intensity;
 	}
 
-	// 0.8 Кометы: движение из случайной точки в другую, хвост ориентируем по направлению полёта, голова даёт точечный свет
+	// 0.8 Кометы: движемся от start к end за duration, head даёт точечный свет, хвостовая модель растягивается по длине пути и угасает через fade in/out
 	uint32_t min_point_lights = 1 + static_cast<uint32_t>(comets.size()); // слот 0 — Солнце, далее кометы
 	if (min_point_lights > 8) min_point_lights = 8;
 	point_light_count = std::max(point_light_count, min_point_lights);
@@ -3399,8 +3433,9 @@ void update(double time) {
 	}
 
 	// Update orbital positions
-	// 0.3 Расчет эллиптических орбит (поворот, эксцентриситет) и привязка к родителю
-	//     omega=2*pi/period, sim_years ускоряем коэффициентом orbit_speedup из UI
+	// 0.3 Расчет эллиптических орбит: на каждый кадр считаем угол по omega=2*pi/period с фазой,
+	//     далее параметрическую точку ellipse (a*cos, b*sin) поворачиваем на rotation_rad, добавляем позицию родителя;
+	//     time масштабируем orbit_speedup, так ускоряем всю систему без изменения геометрии.
 	double sim_years = time * (orbit_speedup * 0.1);
 	for (const auto& orbit : orbits) {
 		if (orbit.model_index >= models.size()) continue;
@@ -3494,6 +3529,7 @@ void update(double time) {
 
 
 	int selected_spot = -1;
+	// 4.6 Выбираем прожектор для тени: считаем score по направленности луча в камеру и дистанции, обновляем его матрицу view/projection и передаем индекс в shadow_meta
 	float best_score = -1e9f;
 	for (uint32_t i = 0; i < spotlight_count && i < 8; ++i) {
 		veekay::vec3 pos = {spotlights[i].position.x, spotlights[i].position.y, spotlights[i].position.z};
@@ -3538,10 +3574,13 @@ void update(double time) {
 		.shadow_view_projection_spot = spot_shadow_matrix,
 		.shadow_meta = shadow_meta,
 	};
+	// 4.7 Пакуем матрицы теней и метаданные (включена ли прожекторная тень, индекс прожектора, near/far для point shadow) в SceneUniforms, чтобы фрагментный шейдер знал как сэмплить shadow map
 	scene_uniforms.shadow_meta.z = sun_point_shadow.far_plane;
 	scene_uniforms.shadow_meta.w = sun_point_shadow.near_plane;
 
-	// 2.5 Заполнение UBO с матрицей вида/проекции и позицией камеры для шейдеров
+	// 2.5 Готовим UBO/динамический UBO: собираем SceneUniforms (view-projection, позиция камеры, свет, время, матрицы теней),
+	//     затем для каждой модели пишем ModelUniforms (model matrix, albedo/specular, material params) в динамический буфер
+	//     с учётом alignment. Эти данные читает вершинный/фрагментный шейдеры при рисовании.
 	std::vector<ModelUniforms> model_uniforms(models.size());
 	for (size_t i = 0, n = models.size(); i < n; ++i) {
 		const Model& model = models[i];
@@ -3565,7 +3604,8 @@ void update(double time) {
 		*reinterpret_cast<ModelUniforms*>(pointer) = uniforms;
 	}
 
-	// 2.6 Точечные источники в SSBO (std430): счётчик + массив для фрагментного шейдера
+	// 2.6 Точечные источники в SSBO (std430): первым uint пишем count (выравнено до 16 байт),
+	//     далее подряд копируем массив PointLight. Фрагментный шейдер читает это как std430 SSBO для Блинн-Фонга/теней.
 	{
 		// Записываем количество по смещению 0, затем 16-байтное выравнивание
 		uint32_t* count_ptr = static_cast<uint32_t*>(point_lights_buffer->mapped_region);
@@ -3580,7 +3620,8 @@ void update(double time) {
 	}
 	
 	// Write spotlights to SSBO
-	// 2.7 Передача прожекторов в SSBO (std430) для расчёта Блинн-Фонга в шейдере
+	// 2.7 Прожекторы в SSBO: аналогично точечным — count + массив Spotlight в std430,
+	//     чтобы фрагментный шейдер мог вычислять затухание/конус и тени по данным GPU.
 	{
 		// Записываем количество по смещению 0, затем 16-байтное выравнивание
 		uint32_t* count_ptr = static_cast<uint32_t*>(spotlights_buffer->mapped_region);
@@ -3610,6 +3651,7 @@ void render(VkCommandBuffer cmd, VkFramebuffer framebuffer) {
 
 	const uint32_t model_stride = veekay::graphics::Buffer::structureAlignment(sizeof(ModelUniforms));
 	if (vkCmdBeginRenderingKHR && vkCmdEndRenderingKHR && !models.empty()) {
+		// 4.8 Последовательность шадоу-проходов: сначала направленный, потом прожекторный, затем точечный (кубическая) — все depth-only через dynamic rendering, чтобы к основному проходу уже были готовые shadow map'ы
 		record_shadow_pass(directional_shadow, cmd, static_cast<uint32_t>(models.size()), model_stride);
 		record_shadow_pass(spot_shadow, cmd, static_cast<uint32_t>(models.size()), model_stride);
 		if (point_light_count > 0) {
