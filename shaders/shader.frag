@@ -118,6 +118,21 @@ void main() {
 
 	// 2.8 Свойства материала для Блинн-Фонга
 	float warp = max(model_data.material.y, 0.0);
+	bool thin_surface = (model_data.material.y < 0.0);
+	if (thin_surface) {
+		// Bias normals of thin surfaces (e.g., rings) toward the main light to avoid full grazing black-out
+		vec3 to_main_light = vec3(0.0);
+		if (point_lights.count > 0) {
+			to_main_light = point_lights.lights[0].position.xyz - f_position;
+		} else {
+			to_main_light = scene.lighting.directional_light.direction.xyz;
+		}
+		float len = length(to_main_light);
+		if (len > 1e-4) {
+			to_main_light /= len;
+			N = normalize(N + to_main_light * 0.35);
+		}
+	}
 	vec2 uv = f_uv;
 	if (warp > 0.0) {
 		// 3.6 Нетривиальная анимация UV (дрейф+лёгкий вихрь) для выбранных материалов
@@ -149,6 +164,15 @@ void main() {
 	vec3 k_s = model_data.specular_color.xyz * spec_sample.rgb; // Бликовая часть
 	float shininess = model_data.material.x;  // Степень блеска (экспонента)
 	float alpha = clamp(model_data.material.w * albedo_sample.a, 0.0, 1.0);
+	float thin_boost = thin_surface ? 0.35 : 0.0;
+	if (thin_surface) {
+		// Treat near-transparent texels as cutout to avoid dark streaks on rings
+		if (alpha < 0.05) discard;
+		k_a *= alpha;
+		k_d *= alpha;
+		// Give thin surfaces a bit of self-emission so they stay bright even without direct light
+		emissive_sample.rgb += k_d * 0.35;
+	}
 
 	// 0.6 Эмиссия: при отрицательном shininess не считаем освещение, выводим базовый цвет (Солнце)
 	if (shininess < 0.0) {
@@ -157,7 +181,7 @@ void main() {
 	}
 
 	// 2.8 Фоновая составляющая
-	vec3 ambient = scene.lighting.ambient_color.xyz * k_a;
+	vec3 ambient = scene.lighting.ambient_color.xyz * k_a + k_a * thin_boost;
 	vec3 result = ambient;
 	float shadow_dir = sampleShadow(shadow_texture_dir, f_shadow_dir);
 	float shadow_spot = sampleShadow(shadow_texture_spot, f_shadow_spot);

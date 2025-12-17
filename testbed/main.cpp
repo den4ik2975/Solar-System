@@ -2895,38 +2895,37 @@ void initialize(VkCommandBuffer cmd) {
 			models[idx].material.warp_strength = warp;
 		};
 
-		set_tex(sun_idx, "textures/2k_sun.jpg", std::string(), std::string(), 1.2f);
-		models[sun_idx].material.emissive_pulse = 1.0f;
-		set_tex(mercury_idx, "textures/2k_mercury.jpg");
-		set_tex(venus_idx, "textures/2k_venus_surface.jpg");
-		set_tex(earth_idx, "textures/2k_earth_daymap.jpg", "textures/2k_earth_specular_map.png", "textures/2k_earth_clouds.jpg");
-		set_tex(moon_idx, "textures/2k_moon.jpg");
-		set_tex(mars_idx, "textures/2k_mars.jpg");
-		set_tex(jupiter_idx, "textures/2k_jupiter.jpg");
-		set_tex(saturn_idx, "textures/2k_saturn.jpg");
-		if (saturn_ring_model_index < models.size()) {
-			set_tex(saturn_ring_model_index, "textures/2k_saturn_ring_alpha.png");
-			models[saturn_ring_model_index].material.opacity = 0.6f;
-		}
-		set_tex(uranus_idx, "textures/2k_uranus.jpg");
-		set_tex(neptune_idx, "textures/2k_neptune.jpg");
-		if (base_model_index < models.size()) {
-			set_tex(base_model_index, "textures/rosewood/textures/rosewood_veneer1_diff_2k.jpg", std::string(), std::string(), 0.0f);
-			size_t base_tex = models[base_model_index].texture_set;
-			for (int i = 0; i < 4; ++i) {
-				if (support_model_indices[i] < models.size()) {
-					Model& sup = models[support_model_indices[i]];
-					sup.texture_set = base_tex;
-					sup.material.albedo_color = veekay::vec3{1.0f, 1.0f, 1.0f};
-					sup.material.specular_color = BaseMat.specular_color;
-					sup.material.shininess = BaseMat.shininess;
-					sup.material.warp_strength = 0.0f;
-					sup.material.emissive_pulse = 0.0f;
-					sup.material.opacity = 1.0f;
-					// 3.* Опоры отрисовываются внешней стороной (см. инверсию Z-скейла при создании)
+			set_tex(sun_idx, "textures/2k_sun.jpg", std::string(), std::string(), 1.2f);
+			models[sun_idx].material.emissive_pulse = 1.0f;
+			set_tex(mercury_idx, "textures/2k_mercury.jpg");
+			set_tex(venus_idx, "textures/2k_venus_surface.jpg");
+			set_tex(earth_idx, "textures/2k_earth_daymap.jpg", "textures/2k_earth_specular_map.png", "textures/2k_earth_clouds.jpg");
+			set_tex(moon_idx, "textures/2k_moon.jpg");
+			set_tex(mars_idx, "textures/2k_mars.jpg");
+			set_tex(jupiter_idx, "textures/2k_jupiter.jpg");
+			set_tex(saturn_idx, "textures/2k_saturn.jpg");
+			if (saturn_ring_model_index < models.size()) {
+				set_tex(saturn_ring_model_index, "textures/2k_saturn_ring_alpha.png", std::string(), std::string(), -1.0f);
+				models[saturn_ring_model_index].material.opacity = 0.6f;
+			}
+			set_tex(uranus_idx, "textures/2k_uranus.jpg");
+			set_tex(neptune_idx, "textures/2k_neptune.jpg");
+			if (base_model_index < models.size()) {
+				set_tex(base_model_index, "textures/rosewood/textures/rosewood_veneer1_diff_2k.jpg", std::string(), std::string(), 0.0f);
+				size_t base_tex = models[base_model_index].texture_set;
+				for (int i = 0; i < 4; ++i) {
+					if (support_model_indices[i] < models.size()) {
+						Model& sup = models[support_model_indices[i]];
+						sup.texture_set = base_tex;
+						sup.material.albedo_color = veekay::vec3{1.0f, 1.0f, 1.0f};
+						sup.material.specular_color = BaseMat.specular_color;
+						sup.material.shininess = BaseMat.shininess;
+						sup.material.warp_strength = 0.0f;
+						sup.material.emissive_pulse = 0.0f;
+						sup.material.opacity = 1.0f;
+					}
 				}
 			}
-		}
 	}
 
 // NOTE: Destroy resources here, do not cause leaks in your program!
