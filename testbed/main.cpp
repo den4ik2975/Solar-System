@@ -3019,6 +3019,25 @@ void update(double time) {
 	static bool saved_spotlights_valid = false;
 	static float saved_sun_intensity = 10.0f;
 	static float saved_dir_sun_intensity = 0.2f;
+	struct ShowcaseState {
+		bool active = false;
+		float elapsed = 0.0f;
+		int current_stage = -1;
+		bool saved = false;
+		veekay::vec3 saved_cam_pos{};
+		veekay::vec3 saved_cam_rot{};
+		veekay::vec3 saved_cam_target{};
+		bool saved_lookat = false;
+		bool saved_follow = false;
+		bool saved_cinematic = false;
+		bool saved_colorful = false;
+		float saved_sun_int = 0.0f;
+		float saved_dir_int = 0.0f;
+		std::array<veekay::vec4, 8> saved_spot_colors{};
+		std::array<float, 8> saved_spot_int{};
+		bool saved_spots_valid = false;
+	};
+	static ShowcaseState showcase;
 
 
 	// Готовим цвет Солнца без множителя, чтобы в UI редактировать базовое значение
@@ -3177,6 +3196,7 @@ void update(double time) {
 	};
 	ImGui::Text("Spotlights");
 	bool colorful_changed = ImGui::Checkbox("Colorful lights", &colorful_lights);
+	bool showcase_button = ImGui::Button(showcase.active ? "Stop showcase" : "Start showcase");
 	int spot_count_int = int(spotlight_count);
 	bool spot_count_changed = false;
 	if (ImGui::DragInt("Spotlight Count", &spot_count_int, 1.0f, 0, 8)) {
@@ -3222,6 +3242,71 @@ void update(double time) {
 		sun_intensity = saved_sun_intensity;
 		dir_sun_intensity = saved_dir_sun_intensity;
 	}
+
+	auto stop_showcase = [&]() {
+		if (!showcase.active) return;
+		if (showcase.saved) {
+			camera.position = showcase.saved_cam_pos;
+			camera.rotation = showcase.saved_cam_rot;
+			camera.target_position = showcase.saved_cam_target;
+			camera.LookAt = showcase.saved_lookat;
+			follow_selected_target = showcase.saved_follow;
+			cinematic_orbit = showcase.saved_cinematic;
+		}
+		if (!showcase.saved_colorful && colorful_lights) {
+			for (uint32_t i = 0; i < 8 && i < showcase.saved_spot_colors.size(); ++i) {
+				spotlight_base_color[i] = showcase.saved_spot_colors[i];
+				spotlights[i].color = showcase.saved_spot_colors[i];
+				spotlight_intensity[i] = showcase.saved_spot_int[i];
+			}
+			sun_intensity = showcase.saved_sun_int;
+			dir_sun_intensity = showcase.saved_dir_int;
+			colorful_lights = false;
+		}
+		showcase = ShowcaseState{};
+	};
+
+	if (showcase_button) {
+		if (showcase.active) {
+			stop_showcase();
+		} else {
+			showcase.active = true;
+			showcase.elapsed = 0.0f;
+			showcase.current_stage = -1;
+			showcase.saved = true;
+			showcase.saved_cam_pos = camera.position;
+			showcase.saved_cam_rot = camera.rotation;
+			showcase.saved_cam_target = camera.target_position;
+			showcase.saved_lookat = camera.LookAt;
+			showcase.saved_follow = follow_selected_target;
+			showcase.saved_cinematic = cinematic_orbit;
+			showcase.saved_colorful = colorful_lights;
+			showcase.saved_sun_int = sun_intensity;
+			showcase.saved_dir_int = dir_sun_intensity;
+			for (uint32_t i = 0; i < 8; ++i) {
+				showcase.saved_spot_colors[i] = spotlight_base_color[i];
+				showcase.saved_spot_int[i] = spotlight_intensity[i];
+			}
+			showcase.saved_spots_valid = true;
+			camera.LookAt = true;
+			follow_selected_target = false;
+			cinematic_orbit = false;
+		}
+	}
+
+	if (showcase.active) {
+		static const char* stage_names[] = {
+			"Approach center",
+			"Sun flyby",
+			"Planet A",
+			"Planet B",
+			"Comet",
+			"Colorful lights",
+			"Final pass"
+		};
+		int idx = (showcase.current_stage >= 0 && showcase.current_stage < (int)(sizeof(stage_names) / sizeof(stage_names[0]))) ? showcase.current_stage : 0;
+		ImGui::Text("Showcase: %s (stage %d, t=%.2f)", stage_names[idx], showcase.current_stage, showcase.elapsed);
+	}
 	if (colorful_lights && spot_count_changed) {
 		apply_colorful_palette(spotlight_count);
 	}
@@ -3252,7 +3337,7 @@ void update(double time) {
 		spotlight_base_color[i].w = 0.0f;
 	}
 	
-	if (!ImGui::IsWindowHovered()) {
+	if (!ImGui::IsWindowHovered() && !showcase.active) {
 		using namespace veekay::input;
 	
 		if (mouse::isButtonDown(mouse::Button::left)) {
@@ -3496,6 +3581,145 @@ void update(double time) {
 	// Вращаем вал в такт ускорению орбит
 	if (shaft_model_index < models.size()) {
 		models[shaft_model_index].transform.rotation.y += dt_f * orbit_speedup * 10.0f;
+	}
+
+	auto find_model_index = [&](const std::string& title) -> int {
+		for (size_t i = 0; i < models.size(); ++i) {
+			if (models[i].title == title) return static_cast<int>(i);
+		}
+		return -1;
+	};
+
+	if (showcase.active) {
+		camera.LookAt = true;
+		follow_selected_target = false;
+		cinematic_orbit = false;
+
+		float run_dt = (dt_f > 1e-4f) ? dt_f : (1.0f / 60.0f);
+
+		auto smooth_to = [&](const veekay::vec3& desired_pos, const veekay::vec3& desired_target, float sharp = 4.0f) {
+			float k = 1.0f - std::exp(-sharp * run_dt);
+			camera.position = camera.position + (desired_pos - camera.position) * k;
+			camera.target_position = camera.target_position + (desired_target - camera.target_position) * k;
+		};
+
+		const float stage_durations[] = {3.0f, 3.0f, 4.0f, 4.0f, 3.0f, 5.0f, 7.0f};
+		const int stage_count = static_cast<int>(sizeof(stage_durations) / sizeof(stage_durations[0]));
+		showcase.elapsed += run_dt;
+
+		// Определяем текущую стадию по накопленному времени
+		float accum = 0.0f;
+		int stage = stage_count - 1;
+		for (int i = 0; i < stage_count; ++i) {
+			if (showcase.elapsed < accum + stage_durations[i]) {
+				stage = i;
+				break;
+			}
+			accum += stage_durations[i];
+		}
+		float local_t = std::clamp((showcase.elapsed - accum) / stage_durations[stage], 0.0f, 1.0f);
+
+		// Однократные действия при входе в новую стадию
+		if (stage != showcase.current_stage) {
+			showcase.current_stage = stage;
+			// Сбросить временные эффекты при входе в стадию 6 (финал) не требуется, но можно расширить при желании
+		}
+
+		switch (stage) {
+		case 0: { // Отлёт/подлёт к центру
+			float t = local_t;
+			veekay::vec3 far_pos = {0.0f, -globe_radius * 0.4f, -globe_radius * 6.0f};
+			veekay::vec3 near_pos = {0.0f, -globe_radius * 0.25f, -globe_radius * 3.5f};
+			veekay::vec3 desired = far_pos + (near_pos - far_pos) * t;
+			smooth_to(desired, {0.0f, 0.0f, 0.0f});
+			break;
+		}
+		case 1: { // Подлет к Солнцу
+			float t = local_t;
+			veekay::vec3 start = {0.0f, -globe_radius * 0.25f, -globe_radius * 3.5f};
+			veekay::vec3 end = {0.0f, -0.5f, -globe_radius * 1.8f};
+			veekay::vec3 desired = start + (end - start) * t;
+			smooth_to(desired, {0.0f, 0.0f, 0.0f});
+			break;
+		}
+		case 2: { // Планета 1 (Земля/Марс/Сатурн)
+			int idx = find_model_index("Earth");
+			if (idx < 0) idx = find_model_index("Mars");
+			if (idx < 0) idx = find_model_index("Saturn");
+			veekay::vec3 target = (idx >= 0) ? models[idx].transform.position : veekay::vec3{0.0f, 0.0f, 0.0f};
+			float angle = showcase.elapsed * 1.2f;
+			float r = 3.0f;
+			float h = -1.5f;
+			veekay::vec3 desired = target + veekay::vec3{std::cos(angle) * r, h, std::sin(angle) * r};
+			smooth_to(desired, target);
+			break;
+		}
+		case 3: { // Планета 2 (фокус на Сатурн/Нептун)
+			int idx = find_model_index("Saturn");
+			if (idx < 0) idx = find_model_index("Neptune");
+			veekay::vec3 target = (idx >= 0) ? models[idx].transform.position : veekay::vec3{0.0f, 0.0f, 0.0f};
+			float angle = showcase.elapsed * 0.9f;
+			float r = 4.0f;
+			float h = -1.5f;
+			veekay::vec3 desired = target + veekay::vec3{std::cos(angle) * r, h, std::sin(angle) * r};
+			smooth_to(desired, target);
+			break;
+		}
+		case 4: { // Комета
+			if (comets.empty()) {
+				break;
+			}
+			const CometInstance& comet = comets[0];
+			veekay::vec3 path = comet.end - comet.start;
+			float path_len = std::sqrt(path.x * path.x + path.y * path.y + path.z * path.z);
+			float progress = (comet.duration > 1e-5f) ? std::clamp(comet.t / comet.duration, 0.0f, 1.0f) : 0.0f;
+			veekay::vec3 head_pos = comet.start + comet.dir * (progress * path_len);
+			veekay::vec3 side = veekay::vec3::normalized(veekay::vec3{comet.dir.z, 0.0f, -comet.dir.x});
+			veekay::vec3 desired = head_pos - comet.dir * 1.8f + side * 0.6f + veekay::vec3{0.0f, 0.5f, 0.0f};
+			smooth_to(desired, head_pos);
+			break;
+		}
+		case 5: { // Colorful lights крупным планом
+			if (!colorful_lights) {
+				for (uint32_t i = 0; i < 8; ++i) {
+					showcase.saved_spot_colors[i] = spotlight_base_color[i];
+					showcase.saved_spot_int[i] = spotlight_intensity[i];
+				}
+				showcase.saved_spots_valid = true;
+				showcase.saved_sun_int = sun_intensity;
+				showcase.saved_dir_int = dir_sun_intensity;
+				apply_colorful_palette(spotlight_count);
+				sun_intensity = 0.0f;
+				dir_sun_intensity = 0.0f;
+				colorful_lights = true;
+			}
+			veekay::vec3 target = {0.0f, 0.0f, 0.0f};
+			veekay::vec3 desired = {globe_radius * 0.8f, -globe_radius * 0.15f, globe_radius * 1.4f};
+			smooth_to(desired, target);
+			break;
+		}
+		case 6: { // Финальный пролёт внутри сферы
+			float t = local_t;
+			veekay::vec3 start = {globe_radius * 0.6f, -globe_radius * 0.25f, -globe_radius * 1.1f};
+			veekay::vec3 mid   = {-globe_radius * 0.4f, -globe_radius * 0.35f, 0.0f};
+			veekay::vec3 end   = {globe_radius * 0.3f, -globe_radius * 0.25f, globe_radius * 1.0f};
+			veekay::vec3 p01 = start + (mid - start) * t;
+			veekay::vec3 p12 = mid + (end - mid) * t;
+			veekay::vec3 desired = p01 + (p12 - p01) * t;
+			desired.x += std::sin(showcase.elapsed * 0.7f) * 0.6f;
+			desired.y += std::cos(showcase.elapsed * 0.5f) * 0.4f;
+			smooth_to(desired, {0.0f, 0.0f, 0.0f});
+			break;
+		}
+		default:
+			break;
+		}
+
+		float total = 0.0f;
+		for (int i = 0; i < stage_count; ++i) total += stage_durations[i];
+		if (showcase.elapsed >= total) {
+			stop_showcase();
+		}
 	}
 
 	veekay::mat4 dir_shadow_matrix = veekay::mat4::identity();
