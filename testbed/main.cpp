@@ -3532,7 +3532,6 @@ void update(double time) {
 			camera.target_position = target;
 
 			if (cinematic_orbit) {
-				// optional: reset orbit angle when switching targets
 				if (selectedModelIndex != last_target) {
 					cam_angle = 0.0f;
 					last_target = selectedModelIndex;
@@ -3546,7 +3545,7 @@ void update(double time) {
 					std::sin(cam_angle) * cam_orbit_radius
 				};
 
-				// exponential smoothing (no jitter)
+				// экспоненциальное сглаживание
 				float sharp = std::max(0.001f, cam_smoothness);
 				float t = 1.0f - std::exp(-sharp * dt_f);
 				camera.position = camera.position + (desired_eye - camera.position) * t;
