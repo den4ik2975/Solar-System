@@ -1,100 +1,74 @@
-# 🌋 Veekay
+# 🌌 Solar System in a Glass Sphere (Vulkan)
 
-## Getting started
+3D rendering project built on top of a Vulkan-based engine (Veekay).
 
-You need C++ compiler, Vulkan SDK and CMake installed before you can build this project.
+The project visualizes a solar system scene enclosed in a glass sphere, focusing on rendering, lighting and visual composition.
 
-This project uses C++20 standard and thus requires either of those compilers:
-- GCC 10.X
-- Clang 10
-- Microsoft Visual Studio 2019
 
-Veekay is officially tested on *Windows* and *GNU/Linux platforms*, no *macOS* support yet.
-If you have a working macOS solution of this code, consider submitting a PR so others
-can build this example code without a hassle!
+## 🚀 Features
 
-<ins>**1. Downloading the repository**</ins>
+* 🌍 3D solar system scene
+* 🔮 Glass sphere effect
+* 💡 Lighting and shading setup
+* 🌀 Orbital motion simulation
+* 🎮 Real-time rendering using Vulkan
 
-Start by cloning the repository with `git clone --depth 1 https://github.com/vladeemerr/veekay`
 
-This repository does not contain any submodules, it utilizes CMake's `FetchContent` feature instead.
 
-<ins>**2. Configuring the project**</ins>
+## 🧠 What I Did
 
-Run either one of the CMake lines to download dependencies and configure the project:
+* Implemented custom scene inside Vulkan-based engine
+* Built solar system visualization (planets, orbits, scaling)
+* Worked with rendering pipeline and shaders
+* Adjusted lighting and materials for better visuals
+* Integrated scene into existing engine architecture
+
+
+## 🛠 Tech Stack
+
+* C++20
+* Vulkan
+* GLFW
+* ImGui
+* CMake
+
+
+
+## 🧩 Project Structure
+
+* `source/` — engine code (Veekay)
+* `testbed/` — application logic and rendering (main work here)
+
+
+## 🖼️ Preview
+
+<p align="center">
+  <img src="./assets/photo3.png" width="49%"/>
+  <img src="./assets/photo2.png" width="49%"/>
+</p>
+<p align="center">
+  <img src="./assets/gif1.gif" width="70%"/>
+</p>
+
+## ⚙️ Build & Run
 
 ```bash
-cmake --preset debug      # for GNU/Linux (GCC/Clang)
-cmake --preset msvc-debug # for Windows (Visual Studio 2019)
+cmake --preset debug
+cmake --build build-debug --parallel
 ```
 
-If you wish to build in `release` mode, change `debug` to `release`.
-
-If changes are made (added/removed files), or if you want to regenerate project files, rerun the command above.
-
-<ins>**3. Building**</ins>
-
-To build the project, use the line below. You are most likely using `debug` preset, so
-the directory that will eventually contain your build files is named `build-debug`.
-
-Likewise for `release` that directory will be named `build-release`
-
-Run one those commands, depending on which preset you chose:
+Run:
 
 ```bash
-cmake --build build-debug --parallel # for debug
-cmake --build build-release --parallel # for release
+./build-debug/testbed
 ```
 
-## Project structure
 
-### Overview
+## 📌 Notes
 
-Veekay consists of two parts: library and application
+This project is based on an existing Vulkan engine and extended with custom rendering logic and scene implementation.
 
-* `source` directory contains library code
-* `testbed` directory contains application code
 
-Library code contains most of the boilerplate for GLFW, Vulkan and ImGui initialization.
-Veekay library also takes care of managing swapchain and giving you relevant
-`VkCommandBuffer` and `VkFramebuffer` for you to submit/render to.
+## 📫 Author
 
-However, the majority of your work will happen in `testbed`.
-This is where you will write most of your application code.
-It is already linked with Veekay library and contains its own `CMakeLists.txt`
-build recipe for you to modify.
-
-### Application code
-
-`veekay.hpp` header exposes library functionality through a set of callbacks
-(`init`, `shutdown`, `update`, `render`) and global variable `app`.
-
-Look for `testbed/main.cpp`, this is where you start.
-
-`veekay::Application` contains important data like window size, `VkDevice`,
-`VkPhysicalDevice` and `VkRenderPass` (associated with a swapchain).
-
-So, say you want to create a `VkBuffer`. This is how you would do it:
-
-```c++
-// You fill info struct before calling vkCreateXXX
-vkCreateBuffer(veekay::app.vk_device, &info, nullptr, &vertex_buffer);
-```
-
-Notice the `veekay::app.vk_device`, `veekay` is a library namespace,
-`app` is a global state variable provided by Veekay and `vk_device` is
-a `VkDevice` contained in `app` variable.
-
-### Running
-
-`build-xxx/testbed` will contain the executable after successful build
-
-**Make sure your working directory is set to the project root!**
-Project root is where this README file resides. Otherwise, the
-code responsible for loading shaders from files will fail, because relative paths are used.
-
-### Compiling shaders
-
-`testbed/CMakeLists.txt` has build recipe for compiling shader files
-along with an application. Look for a comment in this file to see
-how to compile your shaders.
+Denis Avramenko
