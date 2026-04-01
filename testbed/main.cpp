@@ -43,7 +43,6 @@ uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
 namespace {
 
 constexpr uint32_t max_models = 1024;
-constexpr const char* kShaderDir = "/mnt/d/Denis/Documents/Lab2/Lab2/shaders/";
 
 struct Vertex {
 	veekay::vec3 position;
@@ -396,7 +395,7 @@ constexpr float base_height = 2.0f;
 constexpr float base_radius = 12.0f;
 constexpr float projector_radius = 0.2f;
 constexpr float projector_length = 1.0f;
-const std::string asset_root = "D:/Denis/Documents/Lab2/Lab2/";
+const std::string asset_root = "./";
 size_t glass_model_index = SIZE_MAX;
 size_t base_model_index = SIZE_MAX;
 size_t sun_model_index = SIZE_MAX;
